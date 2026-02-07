@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useMemo, useState, useRef } from "react"
+import React, { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import * as THREE from "three"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Grid, TransformControls } from "@react-three/drei"
@@ -13,7 +13,6 @@ export type Container3DProps = {
 
 export type Cube3DData = {
   id: string
-  // nombre visible (algunos módulos lo envían como productName)
   name?: string
   productName?: string
   color?: string
@@ -24,7 +23,6 @@ export type Cube3DData = {
   height: number
   depth: number
   rotY?: number
-  // peso (algunos módulos lo envían como weight)
   weightKg?: number
   weight?: number
   product?: {
@@ -36,18 +34,15 @@ export type Cube3DData = {
 type Props = {
   container: Container3DProps
   cubes: Cube3DData[]
-
-  // si ya calculas métricas afuera, pásalas; si no, se calculan aquí
   totalWeightKg?: number
   totalVolumeM3?: number
   utilizationPercent?: number
-
   onCubeClick?: (cube: Cube3DData) => void
   onCubesChange?: (cubes: Cube3DData[]) => void
 }
 
 const SNAP_STEP = 10
-const GAP = 2 // pequeño gap para auto-ordenar cuando vienen encimados
+const GAP = 2
 
 function snap(v: number, step = SNAP_STEP) {
   return Math.round(v / step) * step
@@ -58,13 +53,14 @@ function clamp(v: number, min: number, max: number) {
 }
 
 function clampCubeInsideContainer(cube: Cube3DData, container: Container3DProps) {
-  // 🔁 Convención interna usada por el backend/algoritmo:
+  // Convención interna:
   // - cube.x = avance (largo del contenedor)
   // - cube.z = lateral (ancho del contenedor)
-  // En Three.js: X=lateral, Z=avance (por eso luego se mapean invertidos en cubeToCenteredPos).
-  const minX = 0 // avance
+  // En Three.js: X=lateral, Z=avance
+  const minX = 0
   const minY = 0
-  const minZ = 0 // lateral
+  const minZ = 0
+
   const maxX = container.depth - cube.depth
   const maxY = container.height - cube.height
   const maxZ = container.width - cube.width
@@ -77,15 +73,7 @@ function clampCubeInsideContainer(cube: Cube3DData, container: Container3DProps)
   }
 }
 
-/**
- * Normaliza posiciones que a veces llegan como "centro" en vez de "corner".
- * - Corner esperado: x,y,z = esquina inferior izquierda frontal (cm dentro del contenedor)
- * - Centro: x,y,z = centro del cubo dentro del contenedor
- *
- * Esta función detecta y convierte sin romper cuando ya vienen bien.
- */
 function normalizeCubeXYZ(cube: Cube3DData, container: Container3DProps) {
-  // OJO: por convención, X se valida contra DEPTH (largo) y Z contra WIDTH (ancho)
   const W = container.width
   const H = container.height
   const D = container.depth
@@ -104,7 +92,7 @@ function normalizeCubeXYZ(cube: Cube3DData, container: Container3DProps) {
 
   if (isCornerValid) return cube
 
-  // intentar tratar como centro -> convertir a corner
+  // tratar como centro
   const asCorner = {
     ...cube,
     x: cube.x - d / 2,
@@ -130,17 +118,14 @@ function normalizeCubeXYZ(cube: Cube3DData, container: Container3DProps) {
     )
   }
 
-  // último recurso: clamp directo
   return clampCubeInsideContainer(cube, container)
 }
 
 function cubeToCenteredPos(cube: Cube3DData, container: Container3DProps): [number, number, number] {
-  // Datos: cube.x=avance(largo), cube.z=lateral(ancho)
-  // Three: X=lateral(ancho), Z=avance(largo)
   return [
-    cube.z - container.width / 2 + cube.width / 2,
-    cube.y + cube.height / 2,
-    cube.x - container.depth / 2 + cube.depth / 2,
+    cube.z - container.width / 2 + cube.width / 2, // Three X (lateral)
+    cube.y + cube.height / 2,                      // Three Y
+    cube.x - container.depth / 2 + cube.depth / 2, // Three Z (avance)
   ]
 }
 
@@ -186,11 +171,6 @@ function findStackY(candidate: Cube3DData, others: Cube3DData[], container: Cont
   return bestTopY
 }
 
-/**
- * Evita que lleguen encimados:
- * recorre en orden y si colisiona, lo “empuja” en X; si se sale, salta a Z.
- * Mantiene dentro del contenedor.
- */
 function autoResolveOverlaps(input: Cube3DData[], container: Container3DProps) {
   const placed: Cube3DData[] = []
   const maxIters = 4000
@@ -211,13 +191,11 @@ function autoResolveOverlaps(input: Cube3DData[], container: Container3DProps) {
 
     let it = 0
     while (intersectsAny(c) && it < maxIters) {
-      // Empuja primero en lateral (Z datos) y después avanza (X datos)
       c = { ...c, z: c.z + c.width + GAP }
       if (c.z > container.width - c.width) {
         c = { ...c, z: 0, x: c.x + c.depth + GAP }
       }
       if (c.x > container.depth - c.depth) {
-        // si ya no hay espacio, lo regresamos al origen clamped (mejor que “volarlo”)
         c = { ...c, x: 0, z: 0 }
         break
       }
@@ -316,6 +294,7 @@ function ProductCube({
   onTransformingChange?: (v: boolean) => void
 }) {
   const meshRef = useRef<THREE.Mesh>(null)
+  const controlsRef = useRef<any>(null)
   const { camera, gl } = useThree()
 
   const position = useMemo(() => cubeToCenteredPos(cube, container), [cube, container])
@@ -324,21 +303,23 @@ function ProductCube({
   const baseColor = cube.color ?? "#3B82F6"
   const color = isSelected ? "#60A5FA" : baseColor
 
-  const collides = (candidate: Cube3DData) => {
-    const bb = aabbCentered(candidate, container)
-    for (const other of allCubes) {
-      if (other.id === candidate.id) continue
-      if (bb.intersectsBox(aabbCentered(other, container))) return true
-    }
-    return false
-  }
+  const collides = useCallback(
+    (candidate: Cube3DData) => {
+      const bb = aabbCentered(candidate, container)
+      for (const other of allCubes) {
+        if (other.id === candidate.id) continue
+        if (bb.intersectsBox(aabbCentered(other, container))) return true
+      }
+      return false
+    },
+    [allCubes, container]
+  )
 
-  const handleObjectChange = () => {
+  const handleObjectChange = useCallback(() => {
     const m = meshRef.current
     if (!m) return
 
     const raw = centeredPosToCubeXYZ(m.position, cube, container)
-
     let next: Cube3DData = {
       ...cube,
       x: snap(raw.x),
@@ -346,7 +327,6 @@ function ProductCube({
       z: snap(raw.z),
     }
 
-    // “Pegado” a piso/stack simple
     const baseY = findStackY(next, allCubes, container)
     next.y = snap(baseY)
 
@@ -360,7 +340,20 @@ function ProductCube({
     }
 
     onUpdate?.(next)
-  }
+  }, [allCubes, collides, container, cube, onUpdate])
+
+  // ✅ Evento correcto (compatible): dragging-changed
+  useEffect(() => {
+    const tc = controlsRef.current
+    if (!tc || !editable || !isSelected) return
+
+    const onDrag = (e: any) => onTransformingChange?.(!!e?.value)
+    tc.addEventListener?.("dragging-changed", onDrag)
+
+    return () => {
+      tc.removeEventListener?.("dragging-changed", onDrag)
+    }
+  }, [editable, isSelected, onTransformingChange])
 
   const MeshEl = (
     <mesh
@@ -378,10 +371,11 @@ function ProductCube({
     </mesh>
   )
 
-  // CLAVE: envolver el mesh con TransformControls hace que el gizmo SIEMPRE esté en el producto (no en el centro)
+  // ✅ CLAVE: envolver el mesh con TransformControls mantiene el gizmo sobre el producto
   if (editable && isSelected) {
     return (
       <TransformControls
+        ref={controlsRef}
         camera={camera}
         domElement={gl.domElement}
         mode="translate"
@@ -390,9 +384,6 @@ function ProductCube({
         showZ
         translationSnap={SNAP_STEP}
         onObjectChange={handleObjectChange}
-        // Pointer que inicia el drag del gizmo -> avisar que estamos transformando (para bloquear OrbitControls)
-        onPointerDown={() => onTransformingChange?.(true)}
-        onPointerUp={() => onTransformingChange?.(false)}
       >
         {MeshEl}
       </TransformControls>
@@ -412,13 +403,13 @@ export default function LoadVisualizer3D({
   onCubesChange,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const controlsRef = useRef<any>(null)
+  const orbitRef = useRef<any>(null)
 
   const [items, setItems] = useState<Cube3DData[]>([])
   const [editMode, setEditMode] = useState(false)
   const [isTransforming, setIsTransforming] = useState(false)
 
-  // Evita que se quede "pegado" si el mouseUp no llega
+  // 🔒 Evita que se quede pegado si se pierde un mouseUp/touchend
   useEffect(() => {
     const release = () => setIsTransforming(false)
     window.addEventListener("pointerup", release)
@@ -431,20 +422,10 @@ export default function LoadVisualizer3D({
     }
   }, [])
 
-  // Si sales de modo edición, libera el estado y vuelve OrbitControls
   useEffect(() => {
     if (!editMode) setIsTransforming(false)
   }, [editMode])
 
-  // Si entras a modo edición sin selección, selecciona el primer cubo.
-  // Esto evita el caso en que el gizmo quede en el origen por no tener nada seleccionado.
-  useEffect(() => {
-    if (editMode && !selectedId && items.length > 0) {
-      setSelectedId(items[0].id)
-    }
-  }, [editMode, selectedId, items])
-
-  // Normaliza + clamp + evita overlaps al cargar
   useEffect(() => {
     const normalized = (cubes ?? []).map((c) =>
       clampCubeInsideContainer(normalizeCubeXYZ(c, container), container)
@@ -452,6 +433,12 @@ export default function LoadVisualizer3D({
     const resolved = autoResolveOverlaps(normalized, container)
     setItems(resolved)
   }, [cubes, container.width, container.height, container.depth])
+
+  useEffect(() => {
+    if (editMode && !selectedId && items.length > 0) {
+      setSelectedId(items[0].id)
+    }
+  }, [editMode, selectedId, items])
 
   const selectedCube = useMemo(
     () => items.find((c) => c.id === selectedId) ?? null,
@@ -497,10 +484,10 @@ export default function LoadVisualizer3D({
 
   const resetView = () => {
     const m = Math.max(container.width, container.height, container.depth)
-    if (controlsRef.current) {
-      controlsRef.current.target.set(0, container.height / 2, 0)
-      controlsRef.current.object.position.set(m * 0.9, m * 0.65, m * 0.9)
-      controlsRef.current.update()
+    if (orbitRef.current) {
+      orbitRef.current.target.set(0, container.height / 2, 0)
+      orbitRef.current.object.position.set(m * 0.9, m * 0.65, m * 0.9)
+      orbitRef.current.update()
     }
   }
 
@@ -534,7 +521,6 @@ export default function LoadVisualizer3D({
 
   return (
     <div className="w-full">
-      {/* OVERLAY 3D */}
       <div className="w-full h-[420px] overflow-hidden rounded-lg border bg-gray-100">
         <Canvas
           shadows
@@ -551,12 +537,8 @@ export default function LoadVisualizer3D({
             shadow-mapSize-height={2048}
           />
 
-          {/* ✅ Orbit:
-              - fuera de edición: SIEMPRE activo
-              - en edición: bloqueado (para que no se mueva la unidad mientras ajustas cajas)
-              - si estás arrastrando gizmo: también bloqueado */}
           <OrbitControls
-            ref={controlsRef}
+            ref={orbitRef}
             target={[0, container.height / 2, 0]}
             enabled={!editMode && !isTransforming}
             enableDamping
@@ -566,7 +548,7 @@ export default function LoadVisualizer3D({
             makeDefault
           />
 
-          <ClampPan controlsRef={controlsRef} container={container} />
+          <ClampPan controlsRef={orbitRef} container={container} />
 
           <ReferenceGrid width={container.width} depth={container.depth} />
           <Container {...container} />
@@ -590,7 +572,6 @@ export default function LoadVisualizer3D({
         </Canvas>
       </div>
 
-      {/* CONTROLES + DETALLES */}
       <div className="mt-3 rounded-lg border bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-6 text-sm">
@@ -616,9 +597,7 @@ export default function LoadVisualizer3D({
             <button
               type="button"
               onClick={() => setEditMode((v) => !v)}
-              className={`rounded-md border px-3 py-2 text-sm hover:bg-gray-50 ${
-                editMode ? "bg-gray-50" : ""
-              }`}
+              className={`rounded-md border px-3 py-2 text-sm hover:bg-gray-50 ${editMode ? "bg-gray-50" : ""}`}
             >
               {editMode ? "Modo edición: ON" : "Modo edición: OFF"}
             </button>
@@ -643,12 +622,9 @@ export default function LoadVisualizer3D({
           </div>
         </div>
 
-        {/* Detalle de selección */}
         <div className="mt-4">
           {!selectedCube ? (
-            <div className="text-sm text-gray-500">
-              Selecciona una caja en el visor para ver sus detalles.
-            </div>
+            <div className="text-sm text-gray-500">Selecciona una caja en el visor para ver sus detalles.</div>
           ) : (
             <div className="rounded-md border p-4">
               <div className="text-lg font-semibold">{selectedName || "Producto"}</div>
@@ -676,9 +652,7 @@ export default function LoadVisualizer3D({
                 </div>
                 <div>
                   <div className="text-gray-500">Categoría</div>
-                  <div className="font-semibold">
-                    {selectedCube.product?.category ?? "—"}
-                  </div>
+                  <div className="font-semibold">{selectedCube.product?.category ?? "—"}</div>
                 </div>
               </div>
             </div>

@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
@@ -40,12 +40,16 @@
     "lucide-react": "^0.378.0",
     "next": "^16.1.6",
     "next-auth": "^4.24.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
     "react-hook-form": "^7.51.0",
     "tailwind-merge": "^2.3.0",
-    "three": "^0.164.1",
+    "three": "0.164.1",
     "zod": "^3.23.0"
+  },
+    "overrides": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
