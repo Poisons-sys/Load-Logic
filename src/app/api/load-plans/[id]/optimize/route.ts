@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { loadPlans, loadPlanItems, loadingInstructions, vehicles, products } from '@/db/schema'
+import { loadPlans, loadPlanItems, loadingInstructions } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
 import { optimizeLoad } from '@/lib/optimization'
 import { requireAuth } from '@/lib/auth-server'
+
+// ✅ Tip + helper: convierte null -> undefined (runtime + TypeScript)
+type NullsToUndefined<T> = {
+  [K in keyof T]:
+    T[K] extends null ? undefined :
+    T[K] extends (infer U | null) ? U | undefined :
+    T[K]
+}
+
+function nullsToUndefined<T extends Record<string, any>>(obj: T): NullsToUndefined<T> {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
+  ) as NullsToUndefined<T>
+}
 
 // POST - Ejecutar optimización de estiba
 export async function POST(
@@ -38,34 +52,34 @@ export async function POST(
       )
     }
 
-    type nullsToUndefined<T> = {
-      [K in keyof T]: null extends T[K] ? Exclude<T[K], null> | undefined : T[K]
-}
-
-        function nullsToUndefined<T extends Record<string, any>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
-  ) as T
-}
+    // ✅ Inferimos exactamente lo que optimizeLoad espera (sin inventar "Product")
+    type ProductsForOptimization = Parameters<typeof optimizeLoad>[0]
+    type AlgoProduct = ProductsForOptimization[number]['product']
 
     // Preparar datos para el algoritmo de optimización
-const productsForOptimization = loadPlan.items
-  .filter((item) => item.product !== null)
-  .map((item) => {
-    const p = item.product!
-    const normalized = nullsToUndefined(p)
+    const productsForOptimization: ProductsForOptimization = loadPlan.items
+      .filter((item) => item.product !== null)
+      .map((item) => {
+        const p = item.product!
 
-    return {
-      product: {
-        ...normalized,
-        description: normalized.description ?? "",
-        category: normalized.category ?? "generales",
-        subcategory: normalized.subcategory ?? "Sin subcategoría",
-        hsCode: normalized.hsCode,
-      },
-      quantity: item.quantity ?? 0,
-    }
-  })
+        // Convertir nulls a undefined
+        const normalized = nullsToUndefined(p)
+
+        // ✅ FIX PRINCIPAL: asegura hsCode nunca sea null (para TS y runtime)
+        const normalizedProduct: AlgoProduct = {
+          ...(normalized as any),
+          hsCode: (normalized as any).hsCode ?? undefined,
+
+          // (opcional pero recomendado) si tu algoritmo usa defaults y a veces vienen null
+          description: (normalized as any).description ?? '',
+          subcategory: (normalized as any).subcategory ?? 'Sin subcategoría',
+        }
+
+        return {
+          product: normalizedProduct,
+          quantity: Number(item.quantity ?? 0),
+        }
+      })
 
     // Ejecutar algoritmo de optimización
     const optimizationResult = await optimizeLoad(
@@ -77,7 +91,7 @@ const productsForOptimization = loadPlan.items
     for (let i = 0; i < optimizationResult.placedItems.length; i++) {
       const placedItem = optimizationResult.placedItems[i]
       const item = loadPlan.items.find(
-        li => li.productId === placedItem.product.id
+        (li) => li.productId === placedItem.product.id
       )
 
       if (item) {
