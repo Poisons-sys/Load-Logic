@@ -14,48 +14,28 @@ export async function GET(
     const auth = await requireAuth(request)
 
     const loadPlan = await db.query.loadPlans.findFirst({
-      where: and(
-        eq(loadPlans.id, id),
-        eq(loadPlans.companyId, auth.companyId)
-      ),
+      where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
       with: {
         vehicle: true,
         createdByUser: {
-          columns: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          columns: { id: true, name: true, email: true },
         },
-        items: {
-          with: {
-            product: true,
-          },
-        },
+        items: { with: { product: true } },
         instructions: true,
       },
     })
 
     if (!loadPlan) {
-      return NextResponse.json(
-        { error: 'Plan de carga no encontrado' },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: 'Plan de carga no encontrado' }, { status: 404 })
     }
 
-    return NextResponse.json({
-      success: true,
-      data: loadPlan,
-    })
+    return NextResponse.json({ success: true, data: loadPlan })
   } catch (error) {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     console.error('Error obteniendo plan de carga:', error)
-    return NextResponse.json(
-      { error: 'Error interno del servidor' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
 }
 
@@ -69,17 +49,11 @@ export async function PUT(
     const auth = await requireAuth(request)
 
     const existingLoadPlan = await db.query.loadPlans.findFirst({
-      where: and(
-        eq(loadPlans.id, id),
-        eq(loadPlans.companyId, auth.companyId)
-      ),
+      where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
     })
 
     if (!existingLoadPlan) {
-      return NextResponse.json(
-        { error: 'Plan de carga no encontrado' },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: 'Plan de carga no encontrado' }, { status: 404 })
     }
 
     const body = await request.json()
@@ -91,20 +65,24 @@ export async function PUT(
     let spaceUtilization = existingLoadPlan.spaceUtilization
 
     if (items && Array.isArray(items) && items.length > 0) {
+      // ✅ FIX: vehicleId puede ser null, y Drizzle no permite eq(column, null)
+      if (!existingLoadPlan.vehicleId) {
+        return NextResponse.json(
+          { error: 'Plan de carga sin vehículo asignado' },
+          { status: 400 }
+        )
+      }
+
       const vehicle = await db.query.vehicles.findFirst({
         where: eq(vehicles.id, existingLoadPlan.vehicleId),
       })
 
       if (!vehicle) {
-        return NextResponse.json(
-          { error: 'Vehículo no encontrado' },
-          { status: 404 }
-        )
+        return NextResponse.json({ error: 'Vehículo no encontrado' }, { status: 404 })
       }
 
       // Eliminar items existentes
-      await db.delete(loadPlanItems)
-        .where(eq(loadPlanItems.loadPlanId, id))
+      await db.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
 
       // Crear nuevos items
       totalWeight = 0
@@ -119,19 +97,21 @@ export async function PUT(
           totalWeight += product.weight * item.quantity
           totalVolume += product.volume * item.quantity
 
-          await db.insert(loadPlanItems)
-            .values({
-              loadPlanId: id,
-              productId: item.productId,
-              quantity: item.quantity,
-            })
+          await db.insert(loadPlanItems).values({
+            loadPlanId: id,
+            productId: item.productId,
+            quantity: item.quantity,
+          })
         }
       }
 
-      spaceUtilization = (totalVolume / vehicle.maxVolume) * 100
+      // ✅ Evitar NaN / Infinity si maxVolume llegara 0/null (por schema debería ser number)
+      const maxVol = Number((vehicle as any).maxVolume ?? 0)
+      spaceUtilization = maxVol > 0 ? (totalVolume / maxVol) * 100 : 0
     }
 
-    const [updatedLoadPlan] = await db.update(loadPlans)
+    await db
+      .update(loadPlans)
       .set({
         name: name || existingLoadPlan.name,
         description: description !== undefined ? description : existingLoadPlan.description,
@@ -149,17 +129,9 @@ export async function PUT(
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
       with: {
         vehicle: true,
-        items: {
-          with: {
-            product: true,
-          },
-        },
+        items: { with: { product: true } },
         createdByUser: {
-          columns: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          columns: { id: true, name: true, email: true },
         },
       },
     })
@@ -174,10 +146,7 @@ export async function PUT(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     console.error('Error actualizando plan de carga:', error)
-    return NextResponse.json(
-      { error: 'Error interno del servidor' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
 }
 
@@ -192,17 +161,11 @@ export async function DELETE(
 
     // Solo admin o el creador puede eliminar
     const existingLoadPlan = await db.query.loadPlans.findFirst({
-      where: and(
-        eq(loadPlans.id, id),
-        eq(loadPlans.companyId, auth.companyId)
-      ),
+      where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
     })
 
     if (!existingLoadPlan) {
-      return NextResponse.json(
-        { error: 'Plan de carga no encontrado' },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: 'Plan de carga no encontrado' }, { status: 404 })
     }
 
     if (auth.role !== 'admin' && existingLoadPlan.createdBy !== auth.userId) {
@@ -213,11 +176,11 @@ export async function DELETE(
     }
 
     // Eliminar items primero (cascade)
-    await db.delete(loadPlanItems)
-      .where(eq(loadPlanItems.loadPlanId, id))
+    await db.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
 
     // Eliminar plan de carga
-    await db.delete(loadPlans)
+    await db
+      .delete(loadPlans)
       .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
 
     return NextResponse.json({
@@ -229,9 +192,6 @@ export async function DELETE(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     console.error('Error eliminando plan de carga:', error)
-    return NextResponse.json(
-      { error: 'Error interno del servidor' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
 }
