@@ -71,9 +71,9 @@ interface OptimizationResult {
 }
 
 const LoadVisualizer3D = dynamic(
-  () => import("@/components/LoadVisualizer3D"),
-  { ssr: false }
-)
+  () => import("@/components/LoadVisualizer3D"),{ 
+    ssr: false
+})
 
 export default function OptimizePage() {
   const [selectedVehicle, setSelectedVehicle] = useState<string>('')
