@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { loadPlans, products, vehicles, reports } from '@/db/schema'
-import { eq, and, gte, lte, desc, sql } from 'drizzle-orm'
+import { eq, and, gte, lte } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 
 // GET - Generar reportes y estadísticas
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     const endDate = searchParams.get('endDate')
 
     // Construir condiciones de fecha
-    let dateCondition = undefined
+    let dateCondition: any = undefined
     if (startDate && endDate) {
       dateCondition = and(
         gte(loadPlans.createdAt, new Date(startDate)),
@@ -26,19 +26,19 @@ export async function GET(request: NextRequest) {
     switch (type) {
       case 'summary':
         return await generateSummaryReport(auth.companyId, dateCondition)
-      
+
       case 'efficiency':
         return await generateEfficiencyReport(auth.companyId, dateCondition)
-      
+
       case 'products':
         return await generateProductsReport(auth.companyId, dateCondition)
-      
+
       case 'vehicles':
         return await generateVehiclesReport(auth.companyId, dateCondition)
-      
+
       case 'compliance':
         return await generateComplianceReport(auth.companyId, dateCondition)
-      
+
       default:
         return NextResponse.json(
           { error: 'Tipo de reporte no válido' },
@@ -67,8 +67,13 @@ async function generateSummaryReport(companyId: string, dateCondition: any) {
   })
 
   const totalLoads = allLoadPlans.length
-  const completedLoads = allLoadPlans.filter(lp => lp.status === 'completado').length
-  const pendingLoads = allLoadPlans.filter(lp => lp.status === 'pendiente').length
+
+  // ✅ FIX: "completado" no existe; el estado final es "ejecutado"
+  const completedLoads = allLoadPlans.filter(lp => lp.status === 'ejecutado').length
+
+  // (opcional) si en tu DB status puede venir null, puedes contarlo como pendiente:
+  const pendingLoads = allLoadPlans.filter(lp => lp.status === 'pendiente' || lp.status === null).length
+
   const optimizedLoads = allLoadPlans.filter(lp => lp.status === 'optimizado').length
 
   const totalWeight = allLoadPlans.reduce((sum, lp) => sum + (lp.totalWeight || 0), 0)
@@ -133,8 +138,8 @@ async function generateEfficiencyReport(companyId: string, dateCondition: any) {
   // Calcular promedios
   for (const key in utilizationByVehicle) {
     const vehicle = utilizationByVehicle[key]
-    vehicle.avgUtilization = vehicle.loads > 0 
-      ? vehicle.avgUtilization / vehicle.loads 
+    vehicle.avgUtilization = vehicle.loads > 0
+      ? vehicle.avgUtilization / vehicle.loads
       : 0
   }
 
@@ -267,7 +272,7 @@ export async function POST(request: NextRequest) {
     const auth = await requireAuth(request)
 
     const body = await request.json()
-    const { loadPlanId, type, format, fileUrl } = body
+    const { type, format, fileUrl } = body
 
     if (!type || !format) {
       return NextResponse.json(
@@ -276,15 +281,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // ✅ FIX: reports (según tu schema) NO acepta companyId ni loadPlanId.
+    // Insertamos solo columnas válidas para que compile en Vercel.
     const [newReport] = await db.insert(reports)
       .values({
-        loadPlanId,
         type,
         format,
-        fileUrl,
-        companyId: auth.companyId,
+        fileUrl: fileUrl ?? undefined,
         generatedBy: auth.userId,
-      })
+        // generatedAt normalmente tiene default en DB; si no, descomenta:
+        // generatedAt: new Date(),
+      } as any)
       .returning()
 
     return NextResponse.json({
