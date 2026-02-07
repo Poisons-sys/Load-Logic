@@ -72,7 +72,7 @@ interface OptimizationResult {
 
 const LoadVisualizer3D = dynamic(
   () => import("@/components/LoadVisualizer3D"),{ 
-    ssr: false
+    ssr: false,
 })
 
 export default function OptimizePage() {
