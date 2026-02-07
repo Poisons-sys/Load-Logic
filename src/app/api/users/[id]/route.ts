@@ -8,13 +8,14 @@ import { requireAuth } from '@/lib/auth-server'
 // GET - Obtener usuario por ID
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth(request)
+    const { id } = await params
 
     // Solo admin puede ver otros usuarios, los demás solo su propio perfil
-    if (auth.role !== 'admin' && auth.userId !== params.id) {
+    if (auth.role !== 'admin' && auth.userId !== id) {
       return NextResponse.json(
         { error: 'No tiene permisos para ver este usuario' },
         { status: 403 }
@@ -23,7 +24,7 @@ export async function GET(
 
     const user = await db.query.users.findFirst({
       where: and(
-        eq(users.id, params.id),
+        eq(users.id, id),
         eq(users.companyId, auth.companyId)
       ),
       columns: {
@@ -62,13 +63,14 @@ export async function GET(
 // PUT - Actualizar usuario
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth(request)
+    const { id } = await params
 
     // Solo admin puede actualizar otros usuarios, los demás solo su propio perfil
-    if (auth.role !== 'admin' && auth.userId !== params.id) {
+    if (auth.role !== 'admin' && auth.userId !== id) {
       return NextResponse.json(
         { error: 'No tiene permisos para actualizar este usuario' },
         { status: 403 }
@@ -77,7 +79,7 @@ export async function PUT(
 
     const existingUser = await db.query.users.findFirst({
       where: and(
-        eq(users.id, params.id),
+        eq(users.id, id),
         eq(users.companyId, auth.companyId)
       ),
     })
@@ -135,7 +137,11 @@ export async function PUT(
 
     const [updatedUser] = await db.update(users)
       .set(updateData)
-      .where(eq(users.id, params.id))
+      // 👇 importante: id + companyId para no tocar usuarios de otra empresa
+      .where(and(
+        eq(users.id, id),
+        eq(users.companyId, auth.companyId)
+      ))
       .returning({
         id: users.id,
         email: users.email,
@@ -165,10 +171,11 @@ export async function PUT(
 // DELETE - Eliminar usuario (soft delete)
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth(request)
+    const { id } = await params
 
     // Solo admin puede eliminar usuarios
     if (auth.role !== 'admin') {
@@ -179,7 +186,7 @@ export async function DELETE(
     }
 
     // No permitir eliminarse a sí mismo
-    if (auth.userId === params.id) {
+    if (auth.userId === id) {
       return NextResponse.json(
         { error: 'No puede eliminar su propio usuario' },
         { status: 400 }
@@ -188,7 +195,7 @@ export async function DELETE(
 
     const existingUser = await db.query.users.findFirst({
       where: and(
-        eq(users.id, params.id),
+        eq(users.id, id),
         eq(users.companyId, auth.companyId)
       ),
     })
@@ -206,7 +213,10 @@ export async function DELETE(
         isActive: false,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, params.id))
+      .where(and(
+        eq(users.id, id),
+        eq(users.companyId, auth.companyId)
+      ))
 
     return NextResponse.json({
       success: true,
