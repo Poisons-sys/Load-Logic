@@ -378,7 +378,7 @@ function ProductCube({
     </mesh>
   )
 
-  // ✅ CLAVE: envolver el mesh con TransformControls hace que el gizmo SIEMPRE esté en el producto (no en el centro)
+  // CLAVE: envolver el mesh con TransformControls hace que el gizmo SIEMPRE esté en el producto (no en el centro)
   if (editable && isSelected) {
     return (
       <TransformControls
@@ -390,7 +390,9 @@ function ProductCube({
         showZ
         translationSnap={SNAP_STEP}
         onObjectChange={handleObjectChange}
-        onDraggingChanged={(dragging) => onTransformingChange?.(!!dragging)}
+        // Pointer que inicia el drag del gizmo -> avisar que estamos transformando (para bloquear OrbitControls)
+        onPointerDown={() => onTransformingChange?.(true)}
+        onPointerUp={() => onTransformingChange?.(false)}
       >
         {MeshEl}
       </TransformControls>
@@ -416,7 +418,7 @@ export default function LoadVisualizer3D({
   const [editMode, setEditMode] = useState(false)
   const [isTransforming, setIsTransforming] = useState(false)
 
-  // 🔒 Evita que se quede "pegado" si el mouseUp no llega
+  // Evita que se quede "pegado" si el mouseUp no llega
   useEffect(() => {
     const release = () => setIsTransforming(false)
     window.addEventListener("pointerup", release)
