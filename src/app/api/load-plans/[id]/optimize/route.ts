@@ -19,6 +19,16 @@ function nullsToUndefined<T extends Record<string, any>>(obj: T): NullsToUndefin
   ) as NullsToUndefined<T>
 }
 
+// ✅ Para vehículo: null -> boolean/number defaults seguros
+function toBool(v: any, def = false) {
+  if (v === null || v === undefined) return def
+  return Boolean(v)
+}
+function toNum(v: any, def = 0) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : def
+}
+
 // POST - Ejecutar optimización de estiba
 export async function POST(
   request: NextRequest,
@@ -52,25 +62,21 @@ export async function POST(
       )
     }
 
-    // ✅ Inferimos exactamente lo que optimizeLoad espera (sin inventar "Product")
+    // ✅ Inferimos tipos EXACTOS esperados por optimizeLoad
     type ProductsForOptimization = Parameters<typeof optimizeLoad>[0]
     type AlgoProduct = ProductsForOptimization[number]['product']
+    type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
 
-    // Preparar datos para el algoritmo de optimización
+    // --- Productos (null -> undefined donde aplique)
     const productsForOptimization: ProductsForOptimization = loadPlan.items
       .filter((item) => item.product !== null)
       .map((item) => {
         const p = item.product!
-
-        // Convertir nulls a undefined
         const normalized = nullsToUndefined(p)
 
-        // ✅ FIX PRINCIPAL: asegura hsCode nunca sea null (para TS y runtime)
         const normalizedProduct: AlgoProduct = {
           ...(normalized as any),
           hsCode: (normalized as any).hsCode ?? undefined,
-
-          // (opcional pero recomendado) si tu algoritmo usa defaults y a veces vienen null
           description: (normalized as any).description ?? '',
           subcategory: (normalized as any).subcategory ?? 'Sin subcategoría',
         }
@@ -81,10 +87,33 @@ export async function POST(
         }
       })
 
+    // --- Vehículo (null -> defaults)
+    const v = loadPlan.vehicle
+    const vehicleForOptimization: AlgoVehicle = {
+      ...(v as any),
+
+      // ✅ Fix principal que te marca Vercel
+      hasRefrigeration: toBool((v as any).hasRefrigeration, false),
+
+      // ✅ recomendados: normaliza TODOS los boolean nullable típicos
+      hasLiftgate: toBool((v as any).hasLiftgate, false),
+      hasSideDoor: toBool((v as any).hasSideDoor, false),
+      hasRearDoor: toBool((v as any).hasRearDoor, true),
+      hasTemperatureControl: toBool((v as any).hasTemperatureControl, false),
+      isHazmatAllowed: toBool((v as any).isHazmatAllowed, false),
+      hazardousMaterialAuthorized: toBool((v as any).hazardousMaterialAuthorized, false),
+
+      // ✅ si alguno de estos llega null, también conviene normalizar números
+      internalLength: toNum((v as any).internalLength, (v as any).internalLength ?? 0),
+      internalWidth: toNum((v as any).internalWidth, (v as any).internalWidth ?? 0),
+      internalHeight: toNum((v as any).internalHeight, (v as any).internalHeight ?? 0),
+      maxWeight: toNum((v as any).maxWeight, (v as any).maxWeight ?? 0),
+    }
+
     // Ejecutar algoritmo de optimización
     const optimizationResult = await optimizeLoad(
       productsForOptimization,
-      loadPlan.vehicle
+      vehicleForOptimization
     )
 
     // Actualizar items con posiciones calculadas
@@ -126,7 +155,7 @@ export async function POST(
     }
 
     // Actualizar plan de carga con resultados
-    const [updatedLoadPlan] = await db.update(loadPlans)
+    await db.update(loadPlans)
       .set({
         status: 'optimizado',
         totalWeight: optimizationResult.totalWeight,
@@ -135,18 +164,13 @@ export async function POST(
         updatedAt: new Date(),
       })
       .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
-      .returning()
 
     // Obtener el plan completo actualizado
     const completeLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
       with: {
         vehicle: true,
-        items: {
-          with: {
-            product: true,
-          },
-        },
+        items: { with: { product: true } },
         instructions: {
           orderBy: (instructions, { asc }) => [asc(instructions.step)],
         },
