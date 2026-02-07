@@ -94,21 +94,21 @@ const categoryLabels: Record<string, string> = {
 const productSchema = z.object({
   name: z.string().min(1, 'Nombre requerido'),
   category: z.string().min(1, 'Categoría requerida'),
-  hsCode: z.string().optional().nullable(),
-  description: z.string().optional().nullable(),
-  subcategory: z.string().optional().nullable(),
+  hsCode: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  subcategory: z.string().nullable().optional(),
   length: z.coerce.number().positive('Largo requerido'),
   width: z.coerce.number().positive('Ancho requerido'),
   height: z.coerce.number().positive('Alto requerido'),
   weight: z.coerce.number().positive('Peso requerido'),
-  fragility: z.string().optional().nullable(),
-  temperatureReq: z.string().optional().nullable(),
-  temperatureMin: z.coerce.number().optional().nullable(),
-  temperatureMax: z.coerce.number().optional().nullable(),
+  fragility: z.string().nullable().optional(),
+  temperatureReq: z.string().nullable().optional(),
+  temperatureMin: z.coerce.number().nullable().optional(),
+  temperatureMax: z.coerce.number().nullable().optional(),
   isHazardous: z.boolean().optional().default(false),
-  hazardClass: z.string().optional().nullable(),
-  unNumber: z.string().optional().nullable(),
-})
+  hazardClass: z.string().nullable().optional(),
+  unNumber: z.string().nullable().optional(),
+});
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
@@ -363,7 +363,7 @@ function ProductDialogForm({
       hazardClass: defaultValues?.hazardClass || '',
       unNumber: defaultValues?.unNumber || '',
     },
-  })
+  });
 
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
