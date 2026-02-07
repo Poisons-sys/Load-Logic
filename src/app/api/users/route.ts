@@ -22,12 +22,13 @@ export async function GET(request: NextRequest) {
     const role = searchParams.get('role')
     const isActive = searchParams.get('isActive')
 
-    let conditions = [eq(users.companyId, auth.companyId)]
+    const conditions = [eq(users.companyId, auth.companyId)]
 
     if (role) {
       conditions.push(eq(users.role, role as any))
     }
 
+    // Nota: si NO viene el parámetro, no filtramos. Si viene, sí filtramos.
     if (isActive !== null) {
       conditions.push(eq(users.isActive, isActive === 'true'))
     }
@@ -107,9 +108,17 @@ export async function POST(request: NextRequest) {
         ),
       })
 
-      if (userCount.length >= company.maxUsers) {
+      // ✅ FIX: maxUsers puede ser null
+      const maxUsers = company.maxUsers ?? Infinity
+
+      if (userCount.length >= maxUsers) {
         return NextResponse.json(
-          { error: `Límite de usuarios alcanzado (${company.maxUsers})` },
+          {
+            error:
+              maxUsers === Infinity
+                ? 'Límite de usuarios alcanzado'
+                : `Límite de usuarios alcanzado (${maxUsers})`,
+          },
           { status: 403 }
         )
       }
@@ -149,11 +158,14 @@ export async function POST(request: NextRequest) {
         companyId: users.companyId,
       })
 
-    return NextResponse.json({
-      success: true,
-      message: 'Usuario creado exitosamente',
-      data: newUser,
-    }, { status: 201 })
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Usuario creado exitosamente',
+        data: newUser,
+      },
+      { status: 201 }
+    )
   } catch (error) {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
