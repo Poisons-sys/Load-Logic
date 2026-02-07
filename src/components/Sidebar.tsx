@@ -65,7 +65,6 @@ export default function Sidebar({ userRole }: SidebarProps) {
                   : 'text-gray-300 hover:bg-gray-800 hover:text-white'
               )}
             >
-              <item.icon className="h-5 w-5" />
               {item.name}
             </Link>
           )
