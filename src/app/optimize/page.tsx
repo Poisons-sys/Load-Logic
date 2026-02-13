@@ -324,31 +324,44 @@ export default function OptimizePage() {
   }
 
   // Convertir resultado a formato para visualizador 3D
-  const cubesForVisualizer = useMemo(() => {
-    const placed = optimizationResult?.placedItems ?? []
-    const out: any[] = []
-    placed.forEach((item: any, idx: number) => {
-      const qty = Number(item.quantity ?? 1)
-      const gap = 2
-      const stepX = Number(item.product?.width ?? 0) + gap
-      for (let q = 0; q < Math.max(qty, 1); q++) {
-        out.push({
-          id: `${item.product.id}-${idx}-${q}`,
-          x: Number(item.position?.x ?? 0) + (q * stepX),
-          y: Number(item.position?.y ?? 0),
-          z: Number(item.position?.z ?? 0),
-          width: Number(item.product?.width ?? 0),
-          height: Number(item.product?.height ?? 0),
-          depth: Number(item.product?.depth ?? item.product?.length ?? 0),
-          color: getCategoryColor(item.product?.category ?? 'generales'),
-          name: String(item.product?.name ?? 'Producto'),
-          weightKg: Number(item.product?.weight ?? 0),
-          product: item.product as any,
-        })
-      }
-    })
-    return out
-  }, [optimizationResult])
+const cubesForVisualizer = useMemo(() => {
+  const placed = optimizationResult?.placedItems ?? []
+  const out: any[] = []
+
+  placed.forEach((item: any, idx: number) => {
+    const rawQty = Number(item.quantity ?? 1)
+    const qty = Math.max(1, Number.isFinite(rawQty) ? rawQty : 1)
+
+    const w = Number(item.product?.width ?? 0)   // ancho (lateral)
+    const d = Number(item.product?.depth ?? item.product?.length ?? 0) // largo (avance)
+    const h = Number(item.product?.height ?? 0)
+
+    // backend te manda rotation.y en grados (según tu mapping actual)
+    const rotDeg = Number(item.rotation?.y ?? 0)
+    const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
+
+    // IMPORTANTE: inicializa todas las copias en 0,0,0
+    // El visualizador las acomodará por filas y resolverá solapamientos automáticamente
+    for (let q = 0; q < qty; q++) {
+      out.push({
+        id: `${item.product?.id ?? "p"}-${idx}-${q}`, // ids únicos
+        x: 0,
+        y: 0,
+        z: 0, // solo z para respetar orden de apilado
+        width: w,
+        height: h,
+        depth: d,
+        rotY,
+        color: getCategoryColor(item.product?.category ?? "generales"),
+        name: String(item.product?.name ?? "Producto"),
+        weightKg: Number(item.product?.weight ?? 0),
+        product: item.product as any,
+      })
+    }
+  })
+
+  return out
+}, [optimizationResult])
 
   return (
     <div className="p-6 space-y-6">
