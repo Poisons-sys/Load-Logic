@@ -1,9 +1,21 @@
-"use client"
+"use client";
 
-import React, { useEffect, useMemo, useState, useRef, useCallback } from "react"
-import * as THREE from "three"
-import { Canvas, useFrame, useThree } from "@react-three/fiber"
-import { OrbitControls, Grid, TransformControls } from "@react-three/drei"
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+} from "react";
+import * as THREE from "three";
+import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
+import {
+  OrbitControls,
+  Grid,
+  TransformControls,
+} from "@react-three/drei";
+import trailerWallImg from "../assets/trailer-wall.png";
+import trailerDoorsImg from "../assets/trailer-doors.png";
 
 export type Container3DProps = {
   width: number
@@ -240,21 +252,94 @@ function ClampPan({
 }
 
 function Container({ width, height, depth }: Container3DProps) {
-  const cy = height / 2
+  const cy = height / 2;
+
+  const wallTexture = useLoader(THREE.TextureLoader, trailerWallImg.src);
+  const doorTexture = useLoader(THREE.TextureLoader, trailerDoorsImg.src);
+
+  // Scale textures to fit walls exactly (no repeat)
+  wallTexture.wrapS = wallTexture.wrapT = THREE.ClampToEdgeWrapping;
+  doorTexture.wrapS = doorTexture.wrapT = THREE.ClampToEdgeWrapping;
 
   return (
     <group>
+      {/* Floor */}
       <mesh position={[0, -0.5, 0]} receiveShadow>
         <boxGeometry args={[width, 1, depth]} />
-        <meshStandardMaterial color="#374151" transparent opacity={0.9} />
+        <meshStandardMaterial color="#2C2C2C" metalness={0.3} roughness={0.7} />
       </mesh>
 
+      {/* Back wall (doors) - rendered BEHIND boxes */}
+      <mesh position={[0, cy, -depth / 2]} receiveShadow>
+        <planeGeometry args={[width, height]} />
+        <meshStandardMaterial 
+          map={doorTexture} 
+          opacity={1}
+          side={THREE.DoubleSide}
+          depthTest={true}
+          polygonOffset={true}
+          polygonOffsetFactor={-1}
+          polygonOffsetUnits={1}
+        />
+      </mesh>
+
+      {/* Left wall */}
+      <mesh
+        position={[-width / 2, cy, 0]}
+        rotation={[0, Math.PI / 2, 0]}
+        receiveShadow
+      >
+        <planeGeometry args={[depth, height]} />
+        <meshStandardMaterial 
+          map={wallTexture} 
+          side={THREE.FrontSide}
+          polygonOffset={true}
+          polygonOffsetFactor={1}
+          polygonOffsetUnits={1}
+        />
+      </mesh>
+
+      {/* Right wall */}
+      <mesh
+        position={[width / 2, cy, 0]}
+        rotation={[0, -Math.PI / 2, 0]}
+        receiveShadow
+      >
+        <planeGeometry args={[depth, height]} />
+        <meshStandardMaterial 
+          map={wallTexture} 
+          side={THREE.FrontSide}
+          polygonOffset={true}
+          polygonOffsetFactor={1}
+          polygonOffsetUnits={1}
+        />
+      </mesh>
+
+      {/* Top - only visible from below (BackSide) */}
+      <mesh
+        position={[0, height, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+      >
+        <planeGeometry args={[width, depth]} />
+        <meshStandardMaterial 
+          color="#E5E5E5" 
+          metalness={0.2} 
+          roughness={0.6}
+          side={THREE.BackSide}
+          polygonOffset={true}
+          polygonOffsetFactor={1}
+          polygonOffsetUnits={1}
+        />
+      </mesh>
+
+      {/* Wireframe edges */}
       <lineSegments position={[0, cy, 0]} renderOrder={10}>
         <edgesGeometry args={[new THREE.BoxGeometry(width, height, depth)]} />
-        <lineBasicMaterial color="#6B7280" depthTest={false} />
+        <lineBasicMaterial color="#1A1A1A" linewidth={2} depthTest={false} />
       </lineSegments>
     </group>
-  )
+  );
 }
 
 function ReferenceGrid({ width, depth }: { width: number; depth: number }) {
