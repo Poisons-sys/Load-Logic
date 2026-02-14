@@ -80,8 +80,13 @@ export default function OptimizePage() {
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([])
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null)
   const [isOptimizing, setIsOptimizing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [loadPlanName, setLoadPlanName] = useState('')
   const [loadPlanId, setLoadPlanId] = useState<string | null>(null)
+  const [savedVehicleId, setSavedVehicleId] = useState<string | null>(null)
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null)
+  const [optimizedSnapshot, setOptimizedSnapshot] = useState<string | null>(null)
+  const [saveFeedback, setSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
 
   // Datos reales (desde la DB vía API)
@@ -172,6 +177,46 @@ export default function OptimizePage() {
     () => availableVehicles.find(v => v.id === selectedVehicle),
     [availableVehicles, selectedVehicle]
   )
+  const configSnapshot = useMemo(() => {
+    const items = selectedItems
+      .map(item => ({ productId: item.product.id, quantity: item.quantity }))
+      .sort((a, b) => a.productId.localeCompare(b.productId))
+
+    return JSON.stringify({
+      vehicleId: selectedVehicle || null,
+      items,
+    })
+  }, [selectedItems, selectedVehicle])
+  const saveSnapshot = useMemo(() => {
+    const items = selectedItems
+      .map(item => ({ productId: item.product.id, quantity: item.quantity }))
+      .sort((a, b) => a.productId.localeCompare(b.productId))
+
+    return JSON.stringify({
+      vehicleId: selectedVehicle || null,
+      name: (loadPlanName || '').trim(),
+      items,
+    })
+  }, [loadPlanName, selectedItems, selectedVehicle])
+  const canSave = Boolean(vehicle) && selectedItems.length > 0
+  const hasUnsavedChanges = canSave && saveSnapshot !== savedSnapshot
+  const hasValidOptimization = Boolean(
+    optimizationResult &&
+    optimizedSnapshot &&
+    optimizedSnapshot === configSnapshot
+  )
+
+  useEffect(() => {
+    if (saveFeedback?.type === 'success' && hasUnsavedChanges) {
+      setSaveFeedback(null)
+    }
+  }, [hasUnsavedChanges, saveFeedback])
+
+  useEffect(() => {
+    if (optimizationResult && optimizedSnapshot && optimizedSnapshot !== configSnapshot) {
+      setOptimizationResult(null)
+    }
+  }, [configSnapshot, optimizationResult, optimizedSnapshot])
 
   const addItem = (product: OptimizeProduct) => {
     const existing = selectedItems.find(item => item.product.id === product.id)
@@ -202,17 +247,28 @@ export default function OptimizePage() {
   const clearItems = () => {
     setSelectedItems([])
     setOptimizationResult(null)
+    setOptimizedSnapshot(null)
     setLoadPlanId(null)
+    setSavedVehicleId(null)
+    setSavedSnapshot(null)
+    setSaveFeedback(null)
     setOptimizeError(null)
   }
 
-  const runOptimization = async () => {
+  const savePlan = async () => {
     if (!vehicle || selectedItems.length === 0) return
+    if (!hasValidOptimization) {
+      setSaveFeedback({
+        type: 'error',
+        message: 'Primero optimiza la carga para poder guardar el plan.',
+      })
+      return
+    }
 
-    setIsOptimizing(true)
+    setIsSaving(true)
+    setSaveFeedback(null)
     setOptimizeError(null)
     try {
-      // ✅ Validación: solo mandar productos que sigan existiendo en availableProducts
       const validSelected = selectedItems
         .filter(it => it.quantity > 0)
         .filter(it => availableProducts.some(p => p.id === it.product.id))
@@ -223,56 +279,115 @@ export default function OptimizePage() {
         .map(it => it.product.id)
 
       if (invalidIds.length > 0) {
-        // Esto evita el error "Productos no válidos" del backend
-        throw new Error(`Productos no válidos: ${invalidIds.join(', ')}`)
+        throw new Error(`Productos no validos: ${invalidIds.join(', ')}`)
       }
 
       if (validSelected.length === 0) {
-        throw new Error('No hay productos válidos seleccionados. (Puede que hayas eliminado alguno)')
+        throw new Error('No hay productos validos seleccionados para guardar.')
       }
 
-      // 1) Crear plan real en DB
-      const planName = (loadPlanName || `Optimización ${new Date().toLocaleString()}`).trim()
-      const createRes = await fetch('/api/load-plans', {
+      const planName = (loadPlanName || `Optimizacion ${new Date().toLocaleString()}`).trim()
+      const isSameVehicle = savedVehicleId === vehicle.id
+      const shouldUpdateExisting = Boolean(loadPlanId && isSameVehicle)
+
+      const endpoint = shouldUpdateExisting ? `/api/load-plans/${loadPlanId}` : '/api/load-plans'
+      const method = shouldUpdateExisting ? 'PUT' : 'POST'
+      const payload = shouldUpdateExisting
+        ? {
+            name: planName,
+            items: validSelected.map(it => ({ productId: it.product.id, quantity: it.quantity })),
+          }
+        : {
+            name: planName,
+            vehicleId: vehicle.id,
+            items: validSelected.map(it => ({ productId: it.product.id, quantity: it.quantity })),
+          }
+
+      const saveRes = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({}))
+        throw new Error(err?.error ?? 'No se pudo guardar el plan de carga')
+      }
+
+      const savedJson = await saveRes.json()
+      const newPlanId = String(savedJson?.data?.id ?? loadPlanId ?? '')
+      if (!newPlanId) throw new Error('No se recibio el ID del plan guardado')
+
+      const persistOptRes = await fetch(`/api/load-plans/${newPlanId}/optimize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+
+      if (!persistOptRes.ok) {
+        const err = await persistOptRes.json().catch(() => ({}))
+        throw new Error(err?.error ?? 'No se pudo guardar la optimizacion del plan')
+      }
+
+      setLoadPlanId(newPlanId)
+      setSavedVehicleId(vehicle.id)
+      setSavedSnapshot(saveSnapshot)
+      setSaveFeedback({ type: 'success', message: 'Plan guardado correctamente.' })
+    } catch (e) {
+      setSaveFeedback({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'Error desconocido al guardar',
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const runOptimization = async () => {
+    if (!vehicle || selectedItems.length === 0) return
+
+    setIsOptimizing(true)
+    setOptimizeError(null)
+    setSaveFeedback(null)
+    try {
+      const validSelected = selectedItems
+        .filter(it => it.quantity > 0)
+        .filter(it => availableProducts.some(p => p.id === it.product.id))
+
+      const invalidIds = selectedItems
+        .filter(it => it.quantity > 0)
+        .filter(it => !availableProducts.some(p => p.id === it.product.id))
+        .map(it => it.product.id)
+
+      if (invalidIds.length > 0) {
+        throw new Error(`Productos no validos: ${invalidIds.join(', ')}`)
+      }
+
+      if (validSelected.length === 0) {
+        throw new Error('No hay productos validos seleccionados. (Puede que hayas eliminado alguno)')
+      }
+
+      const optRes = await fetch('/api/load-plans/preview-optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          name: planName,
           vehicleId: vehicle.id,
           items: validSelected.map(it => ({ productId: it.product.id, quantity: it.quantity })),
         }),
       })
 
-      if (!createRes.ok) {
-        const err = await createRes.json().catch(() => ({}))
-        throw new Error(err?.error ?? 'No se pudo crear el plan de carga')
-      }
-
-      const created = await createRes.json()
-      const newPlanId = created?.data?.id
-      if (!newPlanId) throw new Error('No se recibió el ID del plan')
-      setLoadPlanId(String(newPlanId))
-
-      // 2) Ejecutar algoritmo real
-      const optRes = await fetch(`/api/load-plans/${newPlanId}/optimize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      })
-
       if (!optRes.ok) {
         const err = await optRes.json().catch(() => ({}))
-        throw new Error(err?.error ?? 'Falló la optimización')
+        throw new Error(err?.error ?? 'Fallo la optimizacion')
       }
 
       const optJson = await optRes.json()
-      const lp = optJson?.data?.loadPlan
+      const optimization = optJson?.data?.optimization
+      if (!optimization) throw new Error('Respuesta invalida del servidor')
 
-      if (!lp?.vehicle) throw new Error('Respuesta inválida del servidor (sin vehículo)')
-
-      // 3) Adaptar respuesta real a la UI actual
-      const placedItems = (lp?.items ?? [])
+      const placedItems = (optimization.placedItems ?? [])
         .filter((it: any) => it?.product)
         .map((it: any) => ({
           product: {
@@ -288,23 +403,23 @@ export default function OptimizePage() {
           } as OptimizeProduct,
           quantity: Number(it.quantity ?? 1),
           position: {
-            x: Number(it.positionX ?? 0),
-            y: Number(it.positionY ?? 0),
-            z: Number(it.positionZ ?? 0),
+            x: Number(it.position?.x ?? 0),
+            y: Number(it.position?.y ?? 0),
+            z: Number(it.position?.z ?? 0),
           },
           rotation: {
-            x: Number(it.rotationX ?? 0),
-            y: Number(it.rotationY ?? 0),
-            z: Number(it.rotationZ ?? 0),
+            x: Number(it.rotation?.x ?? 0),
+            y: Number(it.rotation?.y ?? 0),
+            z: Number(it.rotation?.z ?? 0),
           },
         }))
 
       const result: OptimizationResult = {
         placedItems,
-        utilization: Number(lp.spaceUtilization ?? optJson?.data?.optimization?.utilization ?? 0),
-        totalWeight: Number(lp.totalWeight ?? optJson?.data?.optimization?.totalWeight ?? 0),
-        weightDistribution: (lp.weightDistribution ?? optJson?.data?.optimization?.weightDistribution ?? { front: 0, center: 0, rear: 0 }),
-        instructions: (lp.instructions ?? []).map((ins: any) => ({
+        utilization: Number(optimization.utilization ?? 0),
+        totalWeight: Number(optimization.totalWeight ?? 0),
+        weightDistribution: (optimization.weightDistribution ?? { front: 0, center: 0, rear: 0 }),
+        instructions: (optimization.instructions ?? []).map((ins: any) => ({
           step: Number(ins.step ?? 0),
           description: String(ins.description ?? ''),
           productName: String(ins.productName ?? ''),
@@ -313,10 +428,11 @@ export default function OptimizePage() {
       }
 
       setOptimizationResult(result)
+      setOptimizedSnapshot(configSnapshot)
     } catch (e) {
       console.error('Error optimizando:', e)
       setOptimizationResult(null)
-      setLoadPlanId(null)
+      setOptimizedSnapshot(null)
       setOptimizeError(e instanceof Error ? e.message : 'Error desconocido')
     } finally {
       setIsOptimizing(false)
@@ -332,22 +448,25 @@ const cubesForVisualizer = useMemo(() => {
     const rawQty = Number(item.quantity ?? 1)
     const qty = Math.max(1, Number.isFinite(rawQty) ? rawQty : 1)
 
-    const w = Number(item.product?.width ?? 0)   // ancho (lateral)
-    const d = Number(item.product?.depth ?? item.product?.length ?? 0) // largo (avance)
+    const w = Number(item.product?.width ?? 0)
+    const d = Number(item.product?.depth ?? item.product?.length ?? 0)
     const h = Number(item.product?.height ?? 0)
 
-    // backend te manda rotation.y en grados (según tu mapping actual)
     const rotDeg = Number(item.rotation?.y ?? 0)
     const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
 
-    // IMPORTANTE: inicializa todas las copias en 0,0,0
-    // El visualizador las acomodará por filas y resolverá solapamientos automáticamente
+    // Algoritmo: x=lateral, y=alto, z=avance
+    // Visualizador: x=avance, y=alto, z=lateral
+    const algoX = Number(item.position?.x ?? 0)
+    const algoY = Number(item.position?.y ?? 0)
+    const algoZ = Number(item.position?.z ?? 0)
+
     for (let q = 0; q < qty; q++) {
       out.push({
-        id: `${item.product?.id ?? "p"}-${idx}-${q}`, // ids únicos
-        x: 0,
-        y: 0,
-        z: 0, // solo z para respetar orden de apilado
+        id: `${item.product?.id ?? "p"}-${idx}-${q}`,
+        x: algoZ + (q * (d + 2)),
+        y: algoY,
+        z: algoX,
         width: w,
         height: h,
         depth: d,
@@ -377,8 +496,22 @@ const cubesForVisualizer = useMemo(() => {
             Limpiar
           </Button>
           <Button
+            variant="outline"
+            onClick={savePlan}
+            disabled={isLoadingCatalogs || !!catalogsError || !canSave || isSaving || !hasValidOptimization || !hasUnsavedChanges}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {isSaving ? 'Guardando...' : 'Guardar'}
+          </Button>
+          <Button
             onClick={runOptimization}
-            disabled={isLoadingCatalogs || !!catalogsError || !vehicle || selectedItems.length === 0 || isOptimizing}
+            disabled={
+              isLoadingCatalogs ||
+              !!catalogsError ||
+              !vehicle ||
+              selectedItems.length === 0 ||
+              isOptimizing
+            }
           >
             <Play className="h-4 w-4 mr-2" />
             {isOptimizing ? 'Optimizando...' : 'Optimizar'}
@@ -405,6 +538,15 @@ const cubesForVisualizer = useMemo(() => {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-red-600">{optimizeError}</p>
+              </CardContent>
+            </Card>
+          )}
+          {saveFeedback && (
+            <Card>
+              <CardContent className="pt-6">
+                <p className={`text-sm ${saveFeedback.type === 'error' ? 'text-red-600' : 'text-green-600'}`}>
+                  {saveFeedback.message}
+                </p>
               </CardContent>
             </Card>
           )}
@@ -610,9 +752,12 @@ const cubesForVisualizer = useMemo(() => {
                     </div>
 
                     <div className="mt-6 flex gap-2">
-                      <Button>
+                      <Button
+                        onClick={savePlan}
+                        disabled={isSaving || !canSave || !hasValidOptimization || !hasUnsavedChanges}
+                      >
                         <Save className="h-4 w-4 mr-2" />
-                        Guardar Plan
+                        {isSaving ? 'Guardando...' : 'Guardar Plan'}
                       </Button>
                       <Button variant="outline">
                         <FileDown className="h-4 w-4 mr-2" />
@@ -691,3 +836,4 @@ function getCategoryColor(category: string): string {
   }
   return colors[category] || '#9CA3AF'
 }
+

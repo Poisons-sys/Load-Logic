@@ -106,19 +106,24 @@ export default function LoadPlan3DViewPage() {
       for (let q = 0; q < Math.max(qty, 1); q++) {
         // Si el backend guarda una sola posición para el item pero quantity > 1,
         // generamos instancias separadas con un pequeño offset para evitar que se encimen.
-        const baseX = Number(it.positionX ?? 0)
-        const baseY = Number(it.positionY ?? 0)
-        const baseZ = Number(it.positionZ ?? 0)
+        // Algoritmo guarda: X=lateral, Y=alto, Z=avance.
+        // Visualizador usa: X=avance, Y=alto, Z=lateral.
+        const algoX = Number(it.positionX ?? 0)
+        const algoY = Number(it.positionY ?? 0)
+        const algoZ = Number(it.positionZ ?? 0)
         const gap = 2
-        const stepX = Number(p.width ?? 0) + gap
+        const stepAdvance = Number(p.length ?? 0) + gap
+        const rotDeg = Number(it.rotationY ?? 0)
+        const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
         out.push({
           id: `${p.id}-${idx}-${q}`,
-          x: baseX + (q * stepX),
-          y: baseY,
-          z: baseZ,
+          x: algoZ + (q * stepAdvance),
+          y: algoY,
+          z: algoX,
           width: Number(p.width ?? 0),
           height: Number(p.height ?? 0),
           depth: Number(p.length ?? 0),
+          rotY,
           color: getCategoryColor(String(p.category ?? 'generales')),
           name: String(p.name ?? 'Producto'),
           weightKg: Number(p.weight ?? 0),

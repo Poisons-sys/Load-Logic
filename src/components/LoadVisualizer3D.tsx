@@ -541,14 +541,23 @@ export default function LoadVisualizer3D({
     if (!editMode) setIsTransforming(false);
   }, [editMode]);
 
-  // EASY CARGO: acomodo por filas desde puertas (x=0)
+  // If cubes already include calculated coordinates, preserve them.
+  // Otherwise, fallback to auto-packing rows.
   useEffect(() => {
     const normalized = (cubes ?? []).map((c) =>
       clampCubeInsideContainer(normalizeCubeXYZ(c, container), container)
     );
 
-    const packed = packEasyCargoRows(normalized, container);
-    setItems(packed);
+    const hasExplicitLayout = normalized.some(
+      (c) => Math.abs(c.x) > 0.001 || Math.abs(c.y) > 0.001 || Math.abs(c.z) > 0.001
+    );
+
+    if (hasExplicitLayout) {
+      setItems(normalized);
+      return;
+    }
+
+    setItems(packEasyCargoRows(normalized, container));
   }, [cubes, container.width, container.height, container.depth]);
 
   useEffect(() => {

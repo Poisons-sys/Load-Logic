@@ -1,6 +1,28 @@
-import { Product, Vehicle, LoadItem, Cube3D, Container3D } from '@/types'
+import { Product, Vehicle } from '@/types'
 
-// Algoritmo de Bin Packing 3D para optimización de estiba
+type FragilityValue = Product['fragility'] | null | undefined
+
+const FRAGILITY_ORDER: Record<string, number> = {
+  baja: 0,
+  media: 1,
+  alta: 2,
+  muy_alta: 3,
+}
+
+const FRAGILITY_SUPPORT_FACTOR: Record<string, number> = {
+  baja: 2.5,
+  media: 1.5,
+  alta: 0.8,
+  muy_alta: 0.25,
+}
+
+const FRAGILITY_DEFAULT_STACK_HEIGHT: Record<string, number> = {
+  baja: 4,
+  media: 3,
+  alta: 2,
+  muy_alta: 1,
+}
+
 interface BinPackingItem {
   id: string
   width: number
@@ -18,19 +40,46 @@ interface Position {
   z: number
 }
 
-interface PlacedItem extends BinPackingItem {
-  position: Position
+interface RotationVariant {
+  w: number
+  h: number
+  d: number
   rotation: { x: number; y: number; z: number }
 }
 
-// Clase para el algoritmo de Bin Packing 3D
+interface GridBounds {
+  startX: number
+  startY: number
+  startZ: number
+  endX: number
+  endY: number
+  endZ: number
+}
+
+interface PlacementCandidate {
+  position: Position
+  rotation: RotationVariant
+  grid: GridBounds
+  stackLevel: number
+  supporterIds: number[]
+}
+
+interface PlacedItem extends BinPackingItem {
+  position: Position
+  rotation: { x: number; y: number; z: number }
+  stackLevel: number
+  loadAboveWeight: number
+  placedDims: { w: number; h: number; d: number }
+}
+
 export class BinPacking3D {
+  private readonly resolution = 10
   private container: { width: number; height: number; depth: number }
   private items: BinPackingItem[]
   private placedItems: PlacedItem[]
   private maxWeight: number
   private currentWeight: number
-  private spaceMap: boolean[][][]
+  private spaceMap: number[][][]
 
   constructor(
     containerWidth: number,
@@ -43,15 +92,14 @@ export class BinPacking3D {
     this.placedItems = []
     this.maxWeight = maxWeight
     this.currentWeight = 0
-    
-    // Inicializar mapa de espacio (resolución de 10cm)
-    const res = 10
+
+    const res = this.resolution
     this.spaceMap = Array(Math.ceil(containerWidth / res))
       .fill(null)
       .map(() =>
         Array(Math.ceil(containerHeight / res))
           .fill(null)
-          .map(() => Array(Math.ceil(containerDepth / res)).fill(false))
+          .map(() => Array(Math.ceil(containerDepth / res)).fill(-1))
       )
   }
 
@@ -59,31 +107,29 @@ export class BinPacking3D {
     this.items.push(item)
   }
 
-  // Algoritmo principal de empaquetado
   optimize(): { placedItems: PlacedItem[]; utilization: number } {
-    // Ordenar items por volumen (mayor a menor) y fragilidad
     this.items.sort((a, b) => {
+      const fragilityDiff = this.getFragilityRank(a.product.fragility) - this.getFragilityRank(b.product.fragility)
+      if (fragilityDiff !== 0) return fragilityDiff
+
+      if (a.product.stackable !== b.product.stackable) {
+        return a.product.stackable ? -1 : 1
+      }
+
       const volumeA = a.width * a.height * a.depth
       const volumeB = b.width * b.height * b.depth
-      
-      // Priorizar items no frágiles en la base
-      if (a.product.fragility !== b.product.fragility) {
-        const fragilityOrder = { baja: 0, media: 1, alta: 2, muy_alta: 3 }
-        return fragilityOrder[a.product.fragility] - fragilityOrder[b.product.fragility]
-      }
-      
-      return volumeB - volumeA
+      if (volumeA !== volumeB) return volumeB - volumeA
+
+      return b.weight - a.weight
     })
 
     for (const item of this.items) {
       this.tryPlaceItem(item)
     }
 
-    const utilization = this.calculateUtilization()
-    
     return {
       placedItems: this.placedItems,
-      utilization,
+      utilization: this.calculateUtilization(),
     }
   }
 
@@ -92,122 +138,33 @@ export class BinPacking3D {
       return false
     }
 
-    // Intentar diferentes rotaciones
-    const rotations = this.getRotations(item)
-    
-    for (const rotation of rotations) {
-      const position = this.findBestPosition(rotation)
-      
-      if (position) {
-        const placedItem: PlacedItem = {
-          ...item,
-          position,
-          rotation: this.getRotationAngles(rotation, item),
-        }
-        
-        this.placedItems.push(placedItem)
-        this.currentWeight += item.weight
-        this.markSpaceAsOccupied(position, rotation)
-        
-        return true
-      }
-    }
-    
-    return false
-  }
+    const bestPlacement = this.findBestPlacement(item)
+    if (!bestPlacement) return false
 
-  private getRotations(item: BinPackingItem): Array<{ w: number; h: number; d: number }> {
-    const dims = [item.width, item.height, item.depth]
-    const rotations: Array<{ w: number; h: number; d: number }> = []
-    
-    // Generar todas las rotaciones posibles
-    const permutations = [
-      [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
-    ]
-    
-    for (const perm of permutations) {
-      rotations.push({
-        w: dims[perm[0]],
-        h: dims[perm[1]],
-        d: dims[perm[2]],
-      })
-    }
-    
-    return rotations
-  }
-
-  private getRotationAngles(
-    rotated: { w: number; h: number; d: number },
-    original: BinPackingItem
-  ): { x: number; y: number; z: number } {
-    // Determinar ángulos de rotación
-    if (rotated.w === original.width && rotated.h === original.height && rotated.d === original.depth) {
-      return { x: 0, y: 0, z: 0 }
-    } else if (rotated.w === original.width && rotated.h === original.depth && rotated.d === original.height) {
-      return { x: 90, y: 0, z: 0 }
-    } else if (rotated.w === original.height && rotated.h === original.width && rotated.d === original.depth) {
-      return { x: 0, y: 0, z: 90 }
-    }
-    return { x: 0, y: 0, z: 0 }
-  }
-
-  private findBestPosition(rotation: { w: number; h: number; d: number }): Position | null {
-    const res = 10
-    const stepsX = Math.floor((this.container.width - rotation.w) / res) + 1
-    const stepsY = Math.floor((this.container.height - rotation.h) / res) + 1
-    const stepsZ = Math.floor((this.container.depth - rotation.d) / res) + 1
-
-    let bestPosition: Position | null = null
-    let bestScore = Infinity
-
-    // Estrategia: Bottom-Left-Back Fill
-    for (let y = 0; y < stepsY; y++) {
-      for (let z = 0; z < stepsZ; z++) {
-        for (let x = 0; x < stepsX; x++) {
-          const position = { x: x * res, y: y * res, z: z * res }
-          
-          if (this.canPlaceAt(position, rotation)) {
-            // Puntuar posición (preferir más abajo y más atrás)
-            const score = y * 1000 + z * 100 + x
-            
-            if (score < bestScore) {
-              bestScore = score
-              bestPosition = position
-            }
-          }
-        }
-      }
+    const placedIndex = this.placedItems.length
+    const placedItem: PlacedItem = {
+      ...item,
+      position: bestPlacement.position,
+      rotation: bestPlacement.rotation.rotation,
+      stackLevel: bestPlacement.stackLevel,
+      loadAboveWeight: 0,
+      placedDims: {
+        w: bestPlacement.rotation.w,
+        h: bestPlacement.rotation.h,
+        d: bestPlacement.rotation.d,
+      },
     }
 
-    return bestPosition
-  }
+    this.placedItems.push(placedItem)
+    this.currentWeight += item.weight
+    this.markSpaceAsOccupied(bestPlacement.grid, placedIndex)
 
-  private canPlaceAt(
-    position: Position,
-    rotation: { w: number; h: number; d: number }
-  ): boolean {
-    const res = 10
-    const startX = Math.floor(position.x / res)
-    const startY = Math.floor(position.y / res)
-    const startZ = Math.floor(position.z / res)
-    const endX = startX + Math.ceil(rotation.w / res)
-    const endY = startY + Math.ceil(rotation.h / res)
-    const endZ = startZ + Math.ceil(rotation.d / res)
-
-    // Verificar límites del contenedor
-    if (endX > this.spaceMap.length ||
-        endY > this.spaceMap[0].length ||
-        endZ > this.spaceMap[0][0].length) {
-      return false
-    }
-
-    // Verificar si el espacio está libre
-    for (let x = startX; x < endX; x++) {
-      for (let y = startY; y < endY; y++) {
-        for (let z = startZ; z < endZ; z++) {
-          if (this.spaceMap[x]?.[y]?.[z]) {
-            return false
-          }
+    if (bestPlacement.supporterIds.length > 0) {
+      const distributedLoad = item.weight / bestPlacement.supporterIds.length
+      for (const supporterId of bestPlacement.supporterIds) {
+        const supporter = this.placedItems[supporterId]
+        if (supporter) {
+          supporter.loadAboveWeight += distributedLoad
         }
       }
     }
@@ -215,24 +172,190 @@ export class BinPacking3D {
     return true
   }
 
-  private markSpaceAsOccupied(
+  private findBestPlacement(item: BinPackingItem): PlacementCandidate | null {
+    const rotations = this.getRotations(item)
+    let best: PlacementCandidate | null = null
+    let bestScore = Number.POSITIVE_INFINITY
+
+    for (const rotation of rotations) {
+      const stepsX = Math.floor((this.container.width - rotation.w) / this.resolution) + 1
+      const stepsY = Math.floor((this.container.height - rotation.h) / this.resolution) + 1
+      const stepsZ = Math.floor((this.container.depth - rotation.d) / this.resolution) + 1
+
+      if (stepsX <= 0 || stepsY <= 0 || stepsZ <= 0) continue
+
+      for (let y = 0; y < stepsY; y++) {
+        for (let z = 0; z < stepsZ; z++) {
+          for (let x = 0; x < stepsX; x++) {
+            const position: Position = {
+              x: x * this.resolution,
+              y: y * this.resolution,
+              z: z * this.resolution,
+            }
+
+            const candidate = this.evaluatePlacement(item, position, rotation)
+            if (!candidate) continue
+
+            const score = y * 100000 + z * 100 + x
+            if (score < bestScore) {
+              bestScore = score
+              best = candidate
+            }
+          }
+        }
+      }
+    }
+
+    return best
+  }
+
+  private evaluatePlacement(
+    item: BinPackingItem,
     position: Position,
-    rotation: { w: number; h: number; d: number }
-  ) {
-    const res = 10
+    rotation: RotationVariant
+  ): PlacementCandidate | null {
+    const grid = this.toGridBounds(position, rotation)
+    if (!grid) return null
+
+    if (!this.hasSpaceAvailable(grid)) return null
+
+    if (grid.startY === 0) {
+      return {
+        position,
+        rotation,
+        grid,
+        stackLevel: 1,
+        supporterIds: [],
+      }
+    }
+
+    const supporterIds = new Set<number>()
+
+    for (let x = grid.startX; x < grid.endX; x++) {
+      for (let z = grid.startZ; z < grid.endZ; z++) {
+        const belowId = this.spaceMap[x]?.[grid.startY - 1]?.[z] ?? -1
+        if (belowId < 0) return null
+        supporterIds.add(belowId)
+      }
+    }
+
+    const supporters = Array.from(supporterIds)
+    if (supporters.length === 0) return null
+
+    const distributedLoad = item.weight / supporters.length
+    let stackLevel = 1
+
+    for (const supporterId of supporters) {
+      const supporter = this.placedItems[supporterId]
+      if (!supporter) return null
+
+      if (!supporter.product.stackable) return null
+
+      const nextLevel = supporter.stackLevel + 1
+      const configuredMax = Number(supporter.product.maxStackHeight ?? 1)
+      const maxStackHeight = configuredMax > 1
+        ? configuredMax
+        : this.getDefaultStackHeightByFragility(supporter.product.fragility)
+      if (nextLevel > maxStackHeight) return null
+
+      if (!this.canPlaceByFragility(supporter.product.fragility, item.product.fragility)) return null
+
+      const capacity = supporter.weight * this.getSupportFactor(supporter.product.fragility)
+      if (supporter.loadAboveWeight + distributedLoad > capacity) return null
+
+      stackLevel = Math.max(stackLevel, nextLevel)
+    }
+
+    return {
+      position,
+      rotation,
+      grid,
+      stackLevel,
+      supporterIds: supporters,
+    }
+  }
+
+  private getRotations(item: BinPackingItem): RotationVariant[] {
+    const rotations: RotationVariant[] = [
+      {
+        w: item.width,
+        h: item.height,
+        d: item.depth,
+        rotation: { x: 0, y: 0, z: 0 },
+      },
+    ]
+
+    if (item.width !== item.depth) {
+      rotations.push({
+        w: item.depth,
+        h: item.height,
+        d: item.width,
+        rotation: { x: 0, y: 90, z: 0 },
+      })
+    }
+
+    return rotations
+  }
+
+  private toGridBounds(position: Position, rotation: RotationVariant): GridBounds | null {
+    const res = this.resolution
     const startX = Math.floor(position.x / res)
     const startY = Math.floor(position.y / res)
     const startZ = Math.floor(position.z / res)
+
     const endX = startX + Math.ceil(rotation.w / res)
     const endY = startY + Math.ceil(rotation.h / res)
     const endZ = startZ + Math.ceil(rotation.d / res)
 
-    for (let x = startX; x < endX; x++) {
-      for (let y = startY; y < endY; y++) {
-        for (let z = startZ; z < endZ; z++) {
-          if (this.spaceMap[x]?.[y]) {
-            this.spaceMap[x][y][z] = true
+    if (
+      startX < 0 ||
+      startY < 0 ||
+      startZ < 0 ||
+      endX > this.spaceMap.length ||
+      endY > this.spaceMap[0].length ||
+      endZ > this.spaceMap[0][0].length
+    ) {
+      return null
+    }
+
+    return { startX, startY, startZ, endX, endY, endZ }
+  }
+
+  private hasSpaceAvailable(grid: GridBounds): boolean {
+    for (let x = grid.startX; x < grid.endX; x++) {
+      for (let y = grid.startY; y < grid.endY; y++) {
+        for (let z = grid.startZ; z < grid.endZ; z++) {
+          if ((this.spaceMap[x]?.[y]?.[z] ?? -1) >= 0) {
+            return false
           }
+        }
+      }
+    }
+    return true
+  }
+
+  private getFragilityRank(fragility: FragilityValue): number {
+    return FRAGILITY_ORDER[String(fragility ?? 'media')] ?? FRAGILITY_ORDER.media
+  }
+
+  private getSupportFactor(fragility: FragilityValue): number {
+    return FRAGILITY_SUPPORT_FACTOR[String(fragility ?? 'media')] ?? FRAGILITY_SUPPORT_FACTOR.media
+  }
+
+  private getDefaultStackHeightByFragility(fragility: FragilityValue): number {
+    return FRAGILITY_DEFAULT_STACK_HEIGHT[String(fragility ?? 'media')] ?? FRAGILITY_DEFAULT_STACK_HEIGHT.media
+  }
+
+  private canPlaceByFragility(baseFragility: FragilityValue, topFragility: FragilityValue): boolean {
+    // No colocar producto mas "duro" sobre otro mas fragil.
+    return this.getFragilityRank(topFragility) >= this.getFragilityRank(baseFragility)
+  }
+
+  private markSpaceAsOccupied(grid: GridBounds, placedIndex: number) {
+    for (let x = grid.startX; x < grid.endX; x++) {
+      for (let y = grid.startY; y < grid.endY; y++) {
+        for (let z = grid.startZ; z < grid.endZ; z++) {
+          this.spaceMap[x][y][z] = placedIndex
         }
       }
     }
@@ -240,17 +363,15 @@ export class BinPacking3D {
 
   private calculateUtilization(): number {
     const containerVolume = this.container.width * this.container.height * this.container.depth
-    let usedVolume = 0
-    
-    for (const item of this.placedItems) {
-      usedVolume += item.width * item.height * item.depth
-    }
-    
-    return (usedVolume / containerVolume) * 100
+    const usedVolume = this.placedItems.reduce(
+      (sum, item) => sum + item.placedDims.w * item.placedDims.h * item.placedDims.d,
+      0
+    )
+
+    return containerVolume > 0 ? (usedVolume / containerVolume) * 100 : 0
   }
 }
 
-// Función principal de optimización
 export async function optimizeLoad(
   products: Array<{ product: Product; quantity: number }>,
   vehicle: Vehicle
@@ -275,10 +396,9 @@ export async function optimizeLoad(
     vehicle.internalWidth,
     vehicle.internalHeight,
     vehicle.internalLength,
-    vehicle.maxWeight * 1000 // Convertir a kg
+    vehicle.maxWeight
   )
 
-  // Agregar productos al empaquetador
   for (const { product, quantity } of products) {
     for (let i = 0; i < quantity; i++) {
       binPacker.addItem({
@@ -294,16 +414,13 @@ export async function optimizeLoad(
     }
   }
 
-  // Ejecutar optimización
   const result = binPacker.optimize()
 
-  // Calcular distribución de peso
   let frontWeight = 0
   let centerWeight = 0
   let rearWeight = 0
-  
-  const containerDepth = vehicle.internalLength
-  
+  const containerDepth = Math.max(vehicle.internalLength, 1)
+
   for (const item of result.placedItems) {
     const relativeZ = item.position.z / containerDepth
     if (relativeZ < 0.33) {
@@ -315,15 +432,26 @@ export async function optimizeLoad(
     }
   }
 
-  // Generar instrucciones de carga (orden inverso para descarga)
+  const totalWeight = result.placedItems.reduce((sum, item) => sum + item.weight, 0)
+  const weightDistribution = {
+    front: totalWeight > 0 ? (frontWeight / totalWeight) * 100 : 0,
+    center: totalWeight > 0 ? (centerWeight / totalWeight) * 100 : 0,
+    rear: totalWeight > 0 ? (rearWeight / totalWeight) * 100 : 0,
+  }
+
   const instructions = result.placedItems
+    .slice()
+    .sort((a, b) => {
+      if (a.position.y !== b.position.y) return a.position.y - b.position.y
+      if (a.position.z !== b.position.z) return a.position.z - b.position.z
+      return a.position.x - b.position.x
+    })
     .map((item, index) => ({
       step: index + 1,
-      description: `Colocar ${item.product.name} en posición (${item.position.x.toFixed(0)}, ${item.position.y.toFixed(0)}, ${item.position.z.toFixed(0)})`,
+      description: `Colocar ${item.product.name} en posicion (${item.position.x.toFixed(0)}, ${item.position.y.toFixed(0)}, ${item.position.z.toFixed(0)})`,
       productName: item.product.name,
       position: item.position,
     }))
-    .reverse()
 
   return {
     placedItems: result.placedItems.map(item => ({
@@ -333,17 +461,12 @@ export async function optimizeLoad(
       rotation: item.rotation,
     })),
     utilization: result.utilization,
-    totalWeight: result.placedItems.reduce((sum, item) => sum + item.weight, 0),
-    weightDistribution: {
-      front: frontWeight,
-      center: centerWeight,
-      rear: rearWeight,
-    },
+    totalWeight,
+    weightDistribution,
     instructions,
   }
 }
 
-// Función auxiliar para obtener color de categoría
 function getCategoryColor(category: string): string {
   const colors: Record<string, string> = {
     automotriz: '#3B82F6',
@@ -364,14 +487,12 @@ function getCategoryColor(category: string): string {
   return colors[category] || '#9CA3AF'
 }
 
-// Validación de restricciones de carga
 export function validateLoadConstraints(
   placedItems: Array<{ product: Product; position: { y: number } }>,
   vehicle: Vehicle
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = []
 
-  // Verificar apilamiento
   for (let i = 0; i < placedItems.length; i++) {
     const item = placedItems[i]
     const itemsAbove = placedItems.filter(
@@ -385,7 +506,6 @@ export function validateLoadConstraints(
     }
   }
 
-  // Verificar compatibilidad de temperaturas
   const tempReqs = new Set(placedItems.map(item => item.product.temperatureReq))
   if (tempReqs.has('congelado') && tempReqs.has('caliente')) {
     errors.push('No se pueden mezclar productos congelados y calientes')
