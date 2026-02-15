@@ -1,10 +1,263 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { loadPlans, products, vehicles, reports } from '@/db/schema'
-import { eq, and, gte, lte } from 'drizzle-orm'
+import { loadPlans, products, vehicles, reports, users } from '@/db/schema'
+import { eq, and, gte, lte, inArray, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 
-// GET - Generar reportes y estadísticas
+function buildDateCondition(startDate: string | null, endDate: string | null) {
+  if (!startDate || !endDate) return undefined
+  return and(
+    gte(loadPlans.createdAt, new Date(startDate)),
+    lte(loadPlans.createdAt, new Date(endDate))
+  )
+}
+
+async function generateSummaryReport(companyId: string, dateCondition?: ReturnType<typeof and>) {
+  const conditions = [eq(loadPlans.companyId, companyId)]
+  if (dateCondition) conditions.push(dateCondition)
+
+  const allLoadPlans = await db.query.loadPlans.findMany({
+    where: and(...conditions),
+  })
+
+  const totalLoads = allLoadPlans.length
+  const completedLoads = allLoadPlans.filter(lp => lp.status === 'ejecutado').length
+  const pendingLoads = allLoadPlans.filter(lp => lp.status === 'pendiente' || lp.status === null).length
+  const optimizedLoads = allLoadPlans.filter(lp => lp.status === 'optimizado').length
+
+  const totalWeight = allLoadPlans.reduce((sum, lp) => sum + Number(lp.totalWeight || 0), 0)
+  const avgUtilization = totalLoads > 0
+    ? allLoadPlans.reduce((sum, lp) => sum + Number(lp.spaceUtilization || 0), 0) / totalLoads
+    : 0
+
+  const productCount = await db.query.products.findMany({
+    where: eq(products.companyId, companyId),
+    columns: { id: true },
+  })
+
+  const vehicleCount = await db.query.vehicles.findMany({
+    where: eq(vehicles.companyId, companyId),
+    columns: { id: true },
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      summary: {
+        totalLoads,
+        completedLoads,
+        pendingLoads,
+        optimizedLoads,
+        totalWeightTon: Number((totalWeight / 1000).toFixed(2)),
+        avgUtilization: Number(avgUtilization.toFixed(2)),
+        productCount: productCount.length,
+        vehicleCount: vehicleCount.length,
+      },
+    },
+  })
+}
+
+async function generateEfficiencyReport(companyId: string, dateCondition?: ReturnType<typeof and>) {
+  const conditions = [eq(loadPlans.companyId, companyId)]
+  if (dateCondition) conditions.push(dateCondition)
+
+  const allLoadPlans = await db.query.loadPlans.findMany({
+    where: and(...conditions),
+    with: {
+      vehicle: true,
+    },
+  })
+
+  const utilizationByVehicle: Record<string, { name: string; loads: number; avgUtilization: number }> = {}
+
+  for (const loadPlan of allLoadPlans) {
+    if (!loadPlan.vehicle) continue
+    const vehicleId = loadPlan.vehicle.id
+    if (!utilizationByVehicle[vehicleId]) {
+      utilizationByVehicle[vehicleId] = {
+        name: loadPlan.vehicle.name,
+        loads: 0,
+        avgUtilization: 0,
+      }
+    }
+    utilizationByVehicle[vehicleId].loads++
+    utilizationByVehicle[vehicleId].avgUtilization += Number(loadPlan.spaceUtilization || 0)
+  }
+
+  for (const key in utilizationByVehicle) {
+    const vehicle = utilizationByVehicle[key]
+    vehicle.avgUtilization = vehicle.loads > 0
+      ? Number((vehicle.avgUtilization / vehicle.loads).toFixed(2))
+      : 0
+  }
+
+  const overallAvg = allLoadPlans.length > 0
+    ? Number((
+      allLoadPlans.reduce((sum, lp) => sum + Number(lp.spaceUtilization || 0), 0) / allLoadPlans.length
+    ).toFixed(2))
+    : 0
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      overallAvg,
+      byVehicle: Object.values(utilizationByVehicle).sort((a, b) => b.loads - a.loads),
+    },
+  })
+}
+
+async function generateProductsReport(companyId: string) {
+  const allProducts = await db.query.products.findMany({
+    where: eq(products.companyId, companyId),
+    columns: {
+      category: true,
+      weight: true,
+      volume: true,
+    },
+  })
+
+  const byCategory: Record<string, { count: number; totalWeight: number; totalVolume: number }> = {}
+
+  for (const product of allProducts) {
+    const category = String(product.category || 'generales')
+    if (!byCategory[category]) {
+      byCategory[category] = { count: 0, totalWeight: 0, totalVolume: 0 }
+    }
+    byCategory[category].count++
+    byCategory[category].totalWeight += Number(product.weight || 0)
+    byCategory[category].totalVolume += Number(product.volume || 0)
+  }
+
+  const rows = Object.entries(byCategory)
+    .map(([category, data]) => ({
+      category,
+      count: data.count,
+      totalWeight: Number(data.totalWeight.toFixed(2)),
+      totalVolume: Number(data.totalVolume.toFixed(2)),
+    }))
+    .sort((a, b) => b.count - a.count)
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      totalProducts: allProducts.length,
+      byCategory: rows,
+    },
+  })
+}
+
+async function generateVehiclesReport(companyId: string, dateCondition?: ReturnType<typeof and>) {
+  const allVehicles = await db.query.vehicles.findMany({
+    where: eq(vehicles.companyId, companyId),
+  })
+
+  const conditions = [eq(loadPlans.companyId, companyId)]
+  if (dateCondition) conditions.push(dateCondition)
+
+  const allLoadPlans = await db.query.loadPlans.findMany({
+    where: and(...conditions),
+  })
+
+  const vehicleUsage = allVehicles
+    .map(vehicle => {
+      const vehicleLoads = allLoadPlans.filter(lp => lp.vehicleId === vehicle.id)
+      const totalWeightKg = vehicleLoads.reduce((sum, lp) => sum + Number(lp.totalWeight || 0), 0)
+      const avgUtilization = vehicleLoads.length > 0
+        ? vehicleLoads.reduce((sum, lp) => sum + Number(lp.spaceUtilization || 0), 0) / vehicleLoads.length
+        : 0
+
+      return {
+        id: vehicle.id,
+        name: vehicle.name,
+        plateNumber: vehicle.plateNumber,
+        type: vehicle.type,
+        totalLoads: vehicleLoads.length,
+        totalWeightTon: Number((totalWeightKg / 1000).toFixed(2)),
+        avgUtilization: Number(avgUtilization.toFixed(2)),
+        isActive: Boolean(vehicle.isActive),
+      }
+    })
+    .sort((a, b) => b.totalLoads - a.totalLoads)
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      totalVehicles: allVehicles.length,
+      activeVehicles: allVehicles.filter(v => v.isActive).length,
+      vehicleUsage,
+    },
+  })
+}
+
+async function generateComplianceReport(companyId: string, dateCondition?: ReturnType<typeof and>) {
+  const conditions = [eq(loadPlans.companyId, companyId)]
+  if (dateCondition) conditions.push(dateCondition)
+
+  const allLoadPlans = await db.query.loadPlans.findMany({
+    where: and(...conditions),
+  })
+
+  const totalLoads = allLoadPlans.length
+  const nom002Compliant = allLoadPlans.filter(lp => lp.nom002Compliant).length
+  const nom012Compliant = allLoadPlans.filter(lp => lp.nom012Compliant).length
+  const nom015Compliant = allLoadPlans.filter(lp => lp.nom015Compliant).length
+
+  const percentage = (compliant: number) =>
+    totalLoads > 0 ? Number(((compliant / totalLoads) * 100).toFixed(2)) : 100
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      totalLoads,
+      compliance: {
+        nom002: { compliant: nom002Compliant, percentage: percentage(nom002Compliant) },
+        nom012: { compliant: nom012Compliant, percentage: percentage(nom012Compliant) },
+        nom015: { compliant: nom015Compliant, percentage: percentage(nom015Compliant) },
+      },
+      overallCompliance: totalLoads > 0
+        ? Number((((nom002Compliant + nom012Compliant + nom015Compliant) / (totalLoads * 3)) * 100).toFixed(2))
+        : 100,
+    },
+  })
+}
+
+async function generateHistoryReport(companyId: string) {
+  const companyUsers = await db.query.users.findMany({
+    where: eq(users.companyId, companyId),
+    columns: { id: true, name: true, email: true },
+  })
+
+  const userIds = companyUsers.map(u => u.id)
+  if (userIds.length === 0) {
+    return NextResponse.json({ success: true, data: { reports: [] } })
+  }
+
+  const history = await db.query.reports.findMany({
+    where: inArray(reports.generatedBy, userIds),
+    with: {
+      generatedByUser: {
+        columns: { id: true, name: true, email: true },
+      },
+    },
+    orderBy: desc(reports.generatedAt),
+    limit: 100,
+  })
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      reports: history.map(item => ({
+        id: item.id,
+        type: item.type,
+        format: item.format,
+        fileUrl: item.fileUrl,
+        generatedAt: item.generatedAt,
+        generatedBy: item.generatedByUser?.name || item.generatedByUser?.email || 'Usuario',
+      })),
+    },
+  })
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request)
@@ -13,35 +266,24 @@ export async function GET(request: NextRequest) {
     const type = searchParams.get('type') || 'summary'
     const startDate = searchParams.get('startDate')
     const endDate = searchParams.get('endDate')
-
-    // Construir condiciones de fecha
-    let dateCondition: any = undefined
-    if (startDate && endDate) {
-      dateCondition = and(
-        gte(loadPlans.createdAt, new Date(startDate)),
-        lte(loadPlans.createdAt, new Date(endDate))
-      )
-    }
+    const dateCondition = buildDateCondition(startDate, endDate)
 
     switch (type) {
       case 'summary':
         return await generateSummaryReport(auth.companyId, dateCondition)
-
       case 'efficiency':
         return await generateEfficiencyReport(auth.companyId, dateCondition)
-
       case 'products':
-        return await generateProductsReport(auth.companyId, dateCondition)
-
+        return await generateProductsReport(auth.companyId)
       case 'vehicles':
         return await generateVehiclesReport(auth.companyId, dateCondition)
-
       case 'compliance':
         return await generateComplianceReport(auth.companyId, dateCondition)
-
+      case 'history':
+        return await generateHistoryReport(auth.companyId)
       default:
         return NextResponse.json(
-          { error: 'Tipo de reporte no válido' },
+          { error: 'Tipo de reporte no valido' },
           { status: 400 }
         )
     }
@@ -57,220 +299,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// Reporte de resumen general
-async function generateSummaryReport(companyId: string, dateCondition: any) {
-  const conditions = [eq(loadPlans.companyId, companyId)]
-  if (dateCondition) conditions.push(dateCondition)
-
-  const allLoadPlans = await db.query.loadPlans.findMany({
-    where: and(...conditions),
-  })
-
-  const totalLoads = allLoadPlans.length
-
-  // ✅ FIX: "completado" no existe; el estado final es "ejecutado"
-  const completedLoads = allLoadPlans.filter(lp => lp.status === 'ejecutado').length
-
-  // (opcional) si en tu DB status puede venir null, puedes contarlo como pendiente:
-  const pendingLoads = allLoadPlans.filter(lp => lp.status === 'pendiente' || lp.status === null).length
-
-  const optimizedLoads = allLoadPlans.filter(lp => lp.status === 'optimizado').length
-
-  const totalWeight = allLoadPlans.reduce((sum, lp) => sum + (lp.totalWeight || 0), 0)
-  const avgUtilization = allLoadPlans.length > 0
-    ? allLoadPlans.reduce((sum, lp) => sum + (lp.spaceUtilization || 0), 0) / allLoadPlans.length
-    : 0
-
-  const productCount = await db.query.products.findMany({
-    where: eq(products.companyId, companyId),
-  })
-
-  const vehicleCount = await db.query.vehicles.findMany({
-    where: eq(vehicles.companyId, companyId),
-  })
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      summary: {
-        totalLoads,
-        completedLoads,
-        pendingLoads,
-        optimizedLoads,
-        totalWeight: (totalWeight / 1000).toFixed(2), // en toneladas
-        avgUtilization: avgUtilization.toFixed(2),
-        productCount: productCount.length,
-        vehicleCount: vehicleCount.length,
-      },
-    },
-  })
-}
-
-// Reporte de eficiencia
-async function generateEfficiencyReport(companyId: string, dateCondition: any) {
-  const conditions = [eq(loadPlans.companyId, companyId)]
-  if (dateCondition) conditions.push(dateCondition)
-
-  const allLoadPlans = await db.query.loadPlans.findMany({
-    where: and(...conditions),
-    with: {
-      vehicle: true,
-    },
-  })
-
-  const utilizationByVehicle: Record<string, { name: string; loads: number; avgUtilization: number }> = {}
-
-  for (const loadPlan of allLoadPlans) {
-    if (loadPlan.vehicle) {
-      const vehicleId = loadPlan.vehicle.id
-      if (!utilizationByVehicle[vehicleId]) {
-        utilizationByVehicle[vehicleId] = {
-          name: loadPlan.vehicle.name,
-          loads: 0,
-          avgUtilization: 0,
-        }
-      }
-      utilizationByVehicle[vehicleId].loads++
-      utilizationByVehicle[vehicleId].avgUtilization += loadPlan.spaceUtilization || 0
-    }
-  }
-
-  // Calcular promedios
-  for (const key in utilizationByVehicle) {
-    const vehicle = utilizationByVehicle[key]
-    vehicle.avgUtilization = vehicle.loads > 0
-      ? vehicle.avgUtilization / vehicle.loads
-      : 0
-  }
-
-  const overallAvg = allLoadPlans.length > 0
-    ? allLoadPlans.reduce((sum, lp) => sum + (lp.spaceUtilization || 0), 0) / allLoadPlans.length
-    : 0
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      overallAvg: overallAvg.toFixed(2),
-      byVehicle: Object.values(utilizationByVehicle),
-    },
-  })
-}
-
-// Reporte de productos
-async function generateProductsReport(companyId: string, dateCondition: any) {
-  const allProducts = await db.query.products.findMany({
-    where: eq(products.companyId, companyId),
-  })
-
-  const byCategory: Record<string, { count: number; totalWeight: number; totalVolume: number }> = {}
-
-  for (const product of allProducts) {
-    const category = product.category
-    if (!byCategory[category]) {
-      byCategory[category] = { count: 0, totalWeight: 0, totalVolume: 0 }
-    }
-    byCategory[category].count++
-    byCategory[category].totalWeight += product.weight
-    byCategory[category].totalVolume += product.volume
-  }
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      totalProducts: allProducts.length,
-      byCategory: Object.entries(byCategory).map(([category, data]) => ({
-        category,
-        ...data,
-      })),
-    },
-  })
-}
-
-// Reporte de vehículos
-async function generateVehiclesReport(companyId: string, dateCondition: any) {
-  const allVehicles = await db.query.vehicles.findMany({
-    where: eq(vehicles.companyId, companyId),
-  })
-
-  const conditions = [eq(loadPlans.companyId, companyId)]
-  if (dateCondition) conditions.push(dateCondition)
-
-  const allLoadPlans = await db.query.loadPlans.findMany({
-    where: and(...conditions),
-  })
-
-  const vehicleUsage = allVehicles.map(vehicle => {
-    const vehicleLoads = allLoadPlans.filter(lp => lp.vehicleId === vehicle.id)
-    const totalWeight = vehicleLoads.reduce((sum, lp) => sum + (lp.totalWeight || 0), 0)
-
-    return {
-      id: vehicle.id,
-      name: vehicle.name,
-      plateNumber: vehicle.plateNumber,
-      type: vehicle.type,
-      totalLoads: vehicleLoads.length,
-      totalWeight: (totalWeight / 1000).toFixed(2),
-      avgUtilization: vehicleLoads.length > 0
-        ? (vehicleLoads.reduce((sum, lp) => sum + (lp.spaceUtilization || 0), 0) / vehicleLoads.length).toFixed(2)
-        : '0',
-      isActive: vehicle.isActive,
-    }
-  })
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      totalVehicles: allVehicles.length,
-      activeVehicles: allVehicles.filter(v => v.isActive).length,
-      vehicleUsage,
-    },
-  })
-}
-
-// Reporte de cumplimiento normativo
-async function generateComplianceReport(companyId: string, dateCondition: any) {
-  const conditions = [eq(loadPlans.companyId, companyId)]
-  if (dateCondition) conditions.push(dateCondition)
-
-  const allLoadPlans = await db.query.loadPlans.findMany({
-    where: and(...conditions),
-  })
-
-  const totalLoads = allLoadPlans.length
-  const nom002Compliant = allLoadPlans.filter(lp => lp.nom002Compliant).length
-  const nom012Compliant = allLoadPlans.filter(lp => lp.nom012Compliant).length
-  const nom015Compliant = allLoadPlans.filter(lp => lp.nom015Compliant).length
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      totalLoads,
-      compliance: {
-        nom002: {
-          compliant: nom002Compliant,
-          percentage: totalLoads > 0 ? ((nom002Compliant / totalLoads) * 100).toFixed(2) : '100',
-        },
-        nom012: {
-          compliant: nom012Compliant,
-          percentage: totalLoads > 0 ? ((nom012Compliant / totalLoads) * 100).toFixed(2) : '100',
-        },
-        nom015: {
-          compliant: nom015Compliant,
-          percentage: totalLoads > 0 ? ((nom015Compliant / totalLoads) * 100).toFixed(2) : '100',
-        },
-      },
-      overallCompliance: totalLoads > 0
-        ? (((nom002Compliant + nom012Compliant + nom015Compliant) / (totalLoads * 3)) * 100).toFixed(2)
-        : '100',
-    },
-  })
-}
-
-// POST - Guardar reporte generado
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request)
-
     const body = await request.json()
     const { type, format, fileUrl } = body
 
@@ -281,17 +312,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // ✅ FIX: reports (según tu schema) NO acepta companyId ni loadPlanId.
-    // Insertamos solo columnas válidas para que compile en Vercel.
+    const allowedFormats = new Set(['pdf', 'csv', 'json'])
+    if (!allowedFormats.has(String(format).toLowerCase())) {
+      return NextResponse.json(
+        { error: 'Formato no valido' },
+        { status: 400 }
+      )
+    }
+
     const [newReport] = await db.insert(reports)
       .values({
-        type,
-        format,
-        fileUrl: fileUrl ?? undefined,
+        type: String(type),
+        format: String(format).toLowerCase(),
+        fileUrl: fileUrl ? String(fileUrl) : undefined,
         generatedBy: auth.userId,
-        // generatedAt normalmente tiene default en DB; si no, descomenta:
-        // generatedAt: new Date(),
-      } as any)
+      })
       .returning()
 
     return NextResponse.json({

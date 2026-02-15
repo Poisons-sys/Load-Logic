@@ -46,8 +46,8 @@ type AppUser = {
 
 const roleLabels: Record<string, string> = {
   admin: 'Admin',
-  manager: 'Manager',
-  operator: 'Operador',
+  supervisor: 'Supervisor',
+  operativo: 'Operador',
 }
 
 const createUserSchema = z.object({
@@ -267,7 +267,7 @@ function CreateUserForm({
 }) {
   const form = useForm<z.infer<typeof createUserSchema>>({
     resolver: zodResolver(createUserSchema),
-    defaultValues: { name: '', email: '', password: '', role: 'operator' },
+    defaultValues: { name: '', email: '', password: '', role: 'operativo' },
   })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -319,8 +319,8 @@ function CreateUserForm({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="manager">Manager</SelectItem>
-            <SelectItem value="operator">Operador</SelectItem>
+            <SelectItem value="supervisor">Supervisor</SelectItem>
+            <SelectItem value="operativo">Operador</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -345,7 +345,7 @@ function EditUserForm({
     values: {
       name: user?.name || '',
       password: '',
-      role: user?.role || 'operator',
+      role: user?.role || 'operativo',
       isActive: user?.isActive ?? true,
     },
   })
@@ -394,8 +394,8 @@ function EditUserForm({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="manager">Manager</SelectItem>
-            <SelectItem value="operator">Operador</SelectItem>
+            <SelectItem value="supervisor">Supervisor</SelectItem>
+            <SelectItem value="operativo">Operador</SelectItem>
           </SelectContent>
         </Select>
       </div>

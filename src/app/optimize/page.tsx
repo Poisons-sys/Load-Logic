@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import dynamic from "next/dynamic"
+import type { Cube3DData } from '@/components/LoadVisualizer3D'
 
 // Tipos (conectados a tu API real)
 type OptimizeProduct = {
@@ -89,6 +90,7 @@ export default function OptimizePage() {
   const [saveFeedback, setSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
   const [optimizeNotice, setOptimizeNotice] = useState<string | null>(null)
+  const [visualizerCubes, setVisualizerCubes] = useState<Cube3DData[]>([])
 
   // Datos reales (desde la DB vía API)
   const [availableProducts, setAvailableProducts] = useState<OptimizeProduct[]>([])
@@ -216,6 +218,7 @@ export default function OptimizePage() {
   useEffect(() => {
     if (optimizationResult && optimizedSnapshot && optimizedSnapshot !== configSnapshot) {
       setOptimizationResult(null)
+      setVisualizerCubes([])
     }
   }, [configSnapshot, optimizationResult, optimizedSnapshot])
 
@@ -250,6 +253,7 @@ export default function OptimizePage() {
   const clearItems = () => {
     setSelectedItems([])
     setOptimizationResult(null)
+    setVisualizerCubes([])
     setOptimizedSnapshot(null)
     setLoadPlanId(null)
     setSavedVehicleId(null)
@@ -324,10 +328,25 @@ export default function OptimizePage() {
       const newPlanId = String(savedJson?.data?.id ?? loadPlanId ?? '')
       if (!newPlanId) throw new Error('No se recibio el ID del plan guardado')
 
+      const cubesToPersist = (visualizerCubes.length > 0 ? visualizerCubes : cubesForVisualizer).map(cube => ({
+        id: cube.id,
+        name: cube.name ?? cube.productName ?? 'Producto',
+        x: Number(cube.x ?? 0),
+        y: Number(cube.y ?? 0),
+        z: Number(cube.z ?? 0),
+        width: Number(cube.width ?? 0),
+        height: Number(cube.height ?? 0),
+        depth: Number(cube.depth ?? 0),
+        rotY: Number(cube.rotY ?? 0),
+        weightKg: Number(cube.weightKg ?? cube.weight ?? 0),
+        productId: String(cube.product?.id ?? ''),
+      }))
+
       const persistOptRes = await fetch(`/api/load-plans/${newPlanId}/optimize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({ manualCubes: cubesToPersist }),
       })
 
       if (!persistOptRes.ok) {
@@ -451,6 +470,7 @@ export default function OptimizePage() {
     } catch (e) {
       console.error('Error optimizando:', e)
       setOptimizationResult(null)
+      setVisualizerCubes([])
       setOptimizedSnapshot(null)
       setOptimizeError(e instanceof Error ? e.message : 'Error desconocido')
       setOptimizeNotice(null)
@@ -460,9 +480,9 @@ export default function OptimizePage() {
   }
 
   // Convertir resultado a formato para visualizador 3D
-const cubesForVisualizer = useMemo(() => {
+  const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
   const placed = optimizationResult?.placedItems ?? []
-  const out: any[] = []
+  const out: Cube3DData[] = []
 
   placed.forEach((item: any, idx: number) => {
     const rawQty = Number(item.quantity ?? 1)
@@ -501,6 +521,49 @@ const cubesForVisualizer = useMemo(() => {
 
   return out
 }, [optimizationResult])
+
+  useEffect(() => {
+    setVisualizerCubes(cubesForVisualizer)
+  }, [cubesForVisualizer])
+
+  const exportPreviewPdf = async () => {
+    if (!vehicle || !optimizationResult) return
+
+    try {
+      const { jsPDF } = await import('jspdf')
+      const autoTable = (await import('jspdf-autotable')).default
+
+      const doc = new jsPDF()
+      doc.setFontSize(16)
+      doc.text('Previsualizacion de Estiba', 14, 16)
+
+      doc.setFontSize(10)
+      doc.text(`Unidad: ${vehicle.name}`, 14, 24)
+      doc.text(`Peso total: ${(optimizationResult.totalWeight / 1000).toFixed(2)} ton`, 14, 30)
+      doc.text(`Utilizacion: ${optimizationResult.utilization.toFixed(1)}%`, 14, 36)
+
+      const rows = (visualizerCubes.length > 0 ? visualizerCubes : cubesForVisualizer).map((cube) => [
+        cube.name ?? cube.productName ?? 'Producto',
+        `${cube.width}x${cube.depth}x${cube.height}`,
+        `${Number(cube.weightKg ?? cube.weight ?? 0).toFixed(1)} kg`,
+        `(${cube.x.toFixed(0)}, ${cube.y.toFixed(0)}, ${cube.z.toFixed(0)})`,
+      ])
+
+      autoTable(doc, {
+        startY: 44,
+        head: [['Producto', 'Dimensiones (cm)', 'Peso', 'Posicion']],
+        body: rows.length > 0 ? rows : [['Sin productos', '-', '-', '-']],
+        styles: { fontSize: 9 },
+      })
+
+      doc.save(`previsualizacion-estiba-${Date.now()}.pdf`)
+    } catch (error) {
+      setSaveFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo exportar el PDF',
+      })
+    }
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -736,7 +799,8 @@ const cubesForVisualizer = useMemo(() => {
                           height: vehicle.internalHeight,
                           depth: vehicle.internalLength,
                         }}
-                        cubes={cubesForVisualizer}
+                        cubes={visualizerCubes}
+                        onCubesChange={setVisualizerCubes}
                       />
                     )}
                   </CardContent>
@@ -786,7 +850,7 @@ const cubesForVisualizer = useMemo(() => {
                         <Save className="h-4 w-4 mr-2" />
                         {isSaving ? 'Guardando...' : 'Guardar Plan'}
                       </Button>
-                      <Button variant="outline">
+                      <Button variant="outline" onClick={exportPreviewPdf}>
                         <FileDown className="h-4 w-4 mr-2" />
                         Exportar PDF
                       </Button>

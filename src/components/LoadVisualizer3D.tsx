@@ -28,8 +28,14 @@ export type Cube3DData = {
   weightKg?: number;
   weight?: number;
   product?: {
+    id?: string;
+    name?: string;
     category?: string | null;
     subcategory?: string | null;
+    weight?: number | null;
+    width?: number | null;
+    height?: number | null;
+    length?: number | null;
   } | null;
 };
 
@@ -328,7 +334,7 @@ function Container({ width, height, depth }: Container3DProps) {
       {/* Floor */}
       <mesh position={[0, -0.5, 0]} receiveShadow>
         <boxGeometry args={[width, 1, depth]} />
-        <meshStandardMaterial side={THREE.FrontSide} color="#2C2C2C" metalness={0.3} roughness={0.7} />
+        <meshStandardMaterial side={THREE.BackSide} color="#2C2C2C" />
       </mesh>
 
       {/* Back wall */}

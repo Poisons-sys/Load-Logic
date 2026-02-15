@@ -8,10 +8,9 @@ export const config = {
   ],
 }
 
-// Middleware que protege todas las rutas excepto /login
+// Proxy que protege todas las rutas excepto /login
 export default withAuth(
-  function middleware(req: NextRequest) {
-    // Aquí puedes agregar lógica adicional si es necesaria
+  function proxy(_req: NextRequest) {
     return undefined
   },
   {

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { loadPlans, loadPlanItems, products, vehicles } from '@/db/schema'
 import { eq, and, desc } from 'drizzle-orm'
-import { optimizeLoad } from '@/lib/optimization'
 import { requireAuth } from '@/lib/auth-server'
 
 // GET - Listar todos los planes de carga
@@ -14,7 +13,7 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const vehicleId = searchParams.get('vehicleId')
 
-    let conditions = [eq(loadPlans.companyId, auth.companyId)]
+    const conditions = [eq(loadPlans.companyId, auth.companyId)]
 
     if (status) {
       conditions.push(eq(loadPlans.status, status as any))
@@ -49,7 +48,7 @@ export async function GET(request: NextRequest) {
       return {
         id: p.id,
         name: p.name,
-        vehicle: p.vehicle?.name || '—',
+        vehicle: p.vehicle?.name || '-',
         vehiclePlate: p.vehicle?.plateNumber || '',
         status: p.status,
         totalWeight: p.totalWeight || 0,
@@ -86,15 +85,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { name, description, vehicleId, items } = body
 
-    // Validaciones
     if (!name || !vehicleId || !items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
-        { error: 'Nombre, vehículo y items son requeridos' },
+        { error: 'Nombre, vehiculo y items son requeridos' },
         { status: 400 }
       )
     }
 
-    // Verificar que el vehículo existe y pertenece a la empresa
     const vehicle = await db.query.vehicles.findFirst({
       where: and(
         eq(vehicles.id, vehicleId),
@@ -104,12 +101,11 @@ export async function POST(request: NextRequest) {
 
     if (!vehicle) {
       return NextResponse.json(
-        { error: 'Vehículo no encontrado' },
+        { error: 'Vehiculo no encontrado' },
         { status: 404 }
       )
     }
 
-    // Verificar que todos los productos existen
     const productIds = items.map((item: any) => item.productId)
     const existingProducts = await db.query.products.findMany({
       where: and(
@@ -119,75 +115,72 @@ export async function POST(request: NextRequest) {
     })
 
     const validProductIds = new Set(existingProducts.map(p => p.id))
-    const invalidProductIds = productIds.filter((id: string) => !validProductIds.has(id))
+    const invalidProductIds = productIds.filter((pid: string) => !validProductIds.has(pid))
 
     if (invalidProductIds.length > 0) {
       return NextResponse.json(
-        { error: `Productos no válidos: ${invalidProductIds.join(', ')}` },
+        { error: `Productos no validos: ${invalidProductIds.join(', ')}` },
         { status: 400 }
       )
     }
 
-    // Calcular totales
     let totalWeight = 0
     let totalVolume = 0
 
     for (const item of items) {
       const product = existingProducts.find(p => p.id === item.productId)
       if (product) {
-        totalWeight += product.weight * item.quantity
-        totalVolume += product.volume * item.quantity
+        totalWeight += Number(product.weight ?? 0) * Number(item.quantity ?? 0)
+        totalVolume += Number(product.volume ?? 0) * Number(item.quantity ?? 0)
       }
     }
 
-    // Validar límites del vehículo
     if (totalWeight > vehicle.maxWeight) {
       return NextResponse.json(
-        { error: `El peso total (${totalWeight}kg) excede la capacidad del vehículo (${vehicle.maxWeight}kg)` },
+        { error: `El peso total (${totalWeight}kg) excede la capacidad del vehiculo (${vehicle.maxWeight}kg)` },
         { status: 400 }
       )
     }
 
     if (totalVolume > vehicle.maxVolume) {
       return NextResponse.json(
-        { error: `El volumen total (${totalVolume}m³) excede la capacidad del vehículo (${vehicle.maxVolume}m³)` },
+        { error: `El volumen total (${totalVolume}m3) excede la capacidad del vehiculo (${vehicle.maxVolume}m3)` },
         { status: 400 }
       )
     }
 
-    // Calcular utilización del espacio
     const spaceUtilization = (totalVolume / vehicle.maxVolume) * 100
 
-    // Crear plan de carga
-    const [newLoadPlan] = await db.insert(loadPlans)
-      .values({
-        name,
-        description,
-        vehicleId,
-        totalWeight,
-        totalVolume,
-        spaceUtilization,
-        weightDistribution: { front: 0, center: 0, rear: 0 }, // Se calculará en la optimización
-        status: 'pendiente',
-        nom002Compliant: true,
-        nom012Compliant: vehicle.nom012Compliant,
-        nom015Compliant: true,
-        companyId: auth.companyId,
-        createdBy: auth.userId,
-      })
-      .returning()
-
-    // Crear items del plan de carga
-    for (const item of items) {
-      await db.insert(loadPlanItems)
+    const newLoadPlan = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(loadPlans)
         .values({
-          loadPlanId: newLoadPlan.id,
+          name,
+          description,
+          vehicleId,
+          totalWeight,
+          totalVolume,
+          spaceUtilization,
+          weightDistribution: { front: 0, center: 0, rear: 0 },
+          status: 'pendiente',
+          nom002Compliant: true,
+          nom012Compliant: vehicle.nom012Compliant,
+          nom015Compliant: true,
+          companyId: auth.companyId,
+          createdBy: auth.userId,
+        })
+        .returning()
+
+      for (const item of items) {
+        await tx.insert(loadPlanItems).values({
+          loadPlanId: created.id,
           productId: item.productId,
           quantity: item.quantity,
         })
-    }
+      }
 
-    // Obtener el plan completo con relaciones
+      return created
+    })
+
     const completeLoadPlan = await db.query.loadPlans.findFirst({
       where: eq(loadPlans.id, newLoadPlan.id),
       with: {

@@ -19,6 +19,10 @@ export default function SettingsPage() {
   })
 
   const [saving, setSaving] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [passwordFeedback, setPasswordFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   useEffect(() => {
     ;(async () => {
@@ -62,6 +66,35 @@ export default function SettingsPage() {
       alert('Cambios guardados')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const changePassword = async () => {
+    if (!currentPassword || !newPassword) {
+      setPasswordFeedback({ type: 'error', message: 'Completa contraseña actual y nueva contraseña.' })
+      return
+    }
+
+    try {
+      setChangingPassword(true)
+      setPasswordFeedback(null)
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      })
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        setPasswordFeedback({ type: 'error', message: json?.error || 'No se pudo cambiar la contraseña' })
+        return
+      }
+
+      setCurrentPassword('')
+      setNewPassword('')
+      setPasswordFeedback({ type: 'success', message: 'Contraseña actualizada correctamente.' })
+    } finally {
+      setChangingPassword(false)
     }
   }
 
@@ -197,15 +230,32 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="currentPassword">Contraseña Actual</Label>
-                      <Input id="currentPassword" type="password" />
+                      <Input
+                        id="currentPassword"
+                        type="password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        disabled={changingPassword}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="newPassword">Nueva Contraseña</Label>
-                      <Input id="newPassword" type="password" />
+                      <Input
+                        id="newPassword"
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        disabled={changingPassword}
+                      />
                     </div>
                   </div>
-                  <Button className="mt-4" variant="outline">
-                    Cambiar Contraseña
+                  {passwordFeedback && (
+                    <p className={`mt-3 text-sm ${passwordFeedback.type === 'error' ? 'text-red-600' : 'text-green-600'}`}>
+                      {passwordFeedback.message}
+                    </p>
+                  )}
+                  <Button className="mt-4" variant="outline" onClick={changePassword} disabled={changingPassword}>
+                    {changingPassword ? 'Actualizando…' : 'Cambiar Contraseña'}
                   </Button>
                 </div>
 

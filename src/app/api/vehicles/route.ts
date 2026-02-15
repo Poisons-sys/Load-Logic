@@ -15,48 +15,27 @@ export async function GET(request: NextRequest) {
     const hasRefrigeration = searchParams.get('hasRefrigeration')
 
     // Por defecto: solo vehículos activos de la empresa
-    const baseWhere = and(
+    const conditions = [
       eq(vehicles.companyId, auth.companyId),
-      eq(vehicles.isActive, true)
-    )
+      eq(vehicles.isActive, true),
+    ]
 
-    let query = db.query.vehicles.findMany({
-      where: baseWhere,
-      orderBy: desc(vehicles.createdAt),
-    })
-
-    // Aplicar filtros
     if (search) {
-      query = db.query.vehicles.findMany({
-        where: and(
-          baseWhere,
-          like(vehicles.name, `%${search}%`)
-        ),
-        orderBy: desc(vehicles.createdAt),
-      })
+      conditions.push(like(vehicles.name, `%${search}%`))
     }
 
     if (type) {
-      query = db.query.vehicles.findMany({
-        where: and(
-          baseWhere,
-          eq(vehicles.type, type as any)
-        ),
-        orderBy: desc(vehicles.createdAt),
-      })
+      conditions.push(eq(vehicles.type, type as any))
     }
 
     if (hasRefrigeration !== null) {
-      query = db.query.vehicles.findMany({
-        where: and(
-          baseWhere,
-          eq(vehicles.hasRefrigeration, hasRefrigeration === 'true')
-        ),
-        orderBy: desc(vehicles.createdAt),
-      })
+      conditions.push(eq(vehicles.hasRefrigeration, hasRefrigeration === 'true'))
     }
 
-    const allVehicles = await query
+    const allVehicles = await db.query.vehicles.findMany({
+      where: and(...conditions),
+      orderBy: desc(vehicles.createdAt),
+    })
 
     return NextResponse.json({
       success: true,

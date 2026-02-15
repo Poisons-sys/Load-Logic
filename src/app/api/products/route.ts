@@ -14,50 +14,27 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category')
     const isHazardous = searchParams.get('isHazardous')
 
-    // Base filter: por empresa + activos
-    const baseWhere = and(
+    const conditions = [
       eq(products.companyId, auth.companyId),
-      eq(products.isActive, true)
-    )
+      eq(products.isActive, true),
+    ]
 
-    let query = db.query.products.findMany({
-      where: baseWhere,
-      orderBy: desc(products.createdAt),
-    })
-
-    // Aplicar filtros (siempre manteniendo companyId + isActive)
     if (search) {
-      query = db.query.products.findMany({
-        where: and(
-          baseWhere,
-          like(products.name, `%${search}%`)
-        ),
-        orderBy: desc(products.createdAt),
-      })
+      conditions.push(like(products.name, `%${search}%`))
     }
 
     if (category) {
-      query = db.query.products.findMany({
-        where: and(
-          baseWhere,
-          eq(products.category, category as any)
-        ),
-        orderBy: desc(products.createdAt),
-      })
+      conditions.push(eq(products.category, category as any))
     }
 
-    // OJO: searchParams.get() regresa string | null
     if (isHazardous !== null) {
-      query = db.query.products.findMany({
-        where: and(
-          baseWhere,
-          eq(products.isHazardous, isHazardous === 'true')
-        ),
-        orderBy: desc(products.createdAt),
-      })
+      conditions.push(eq(products.isHazardous, isHazardous === 'true'))
     }
 
-    const allProducts = await query
+    const allProducts = await db.query.products.findMany({
+      where: and(...conditions),
+      orderBy: desc(products.createdAt),
+    })
 
     return NextResponse.json({
       success: true,

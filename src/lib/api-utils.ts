@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'your-secret-key'
+const JWT_SECRET = process.env.NEXTAUTH_SECRET
 
 export interface TokenData {
   userId: string
@@ -12,6 +12,10 @@ export interface TokenData {
 
 // Verificar token JWT y extraer datos del usuario
 export async function verifyToken(request: NextRequest): Promise<TokenData | null> {
+  if (!JWT_SECRET) {
+    return null
+  }
+
   const authHeader = request.headers.get('authorization')
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {

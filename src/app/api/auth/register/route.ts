@@ -5,10 +5,17 @@ import { eq } from 'drizzle-orm'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'your-secret-key'
+const JWT_SECRET = process.env.NEXTAUTH_SECRET
 
 export async function POST(request: NextRequest) {
   try {
+    if (!JWT_SECRET) {
+      return NextResponse.json(
+        { error: 'Configuración de autenticación incompleta (NEXTAUTH_SECRET)' },
+        { status: 500 }
+      )
+    }
+
     const body = await request.json()
     const { 
       email, 
