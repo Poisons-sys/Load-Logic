@@ -88,6 +88,7 @@ export default function OptimizePage() {
   const [optimizedSnapshot, setOptimizedSnapshot] = useState<string | null>(null)
   const [saveFeedback, setSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [optimizeError, setOptimizeError] = useState<string | null>(null)
+  const [optimizeNotice, setOptimizeNotice] = useState<string | null>(null)
 
   // Datos reales (desde la DB vía API)
   const [availableProducts, setAvailableProducts] = useState<OptimizeProduct[]>([])
@@ -219,29 +220,31 @@ export default function OptimizePage() {
   }, [configSnapshot, optimizationResult, optimizedSnapshot])
 
   const addItem = (product: OptimizeProduct) => {
-    const existing = selectedItems.find(item => item.product.id === product.id)
-    if (existing) {
-      setSelectedItems(selectedItems.map(item =>
-        item.product.id === product.id
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ))
-    } else {
-      setSelectedItems([...selectedItems, { product, quantity: 1 }])
-    }
+    setSelectedItems(prev => {
+      const existing = prev.find(item => item.product.id === product.id)
+      if (existing) {
+        return prev.map(item =>
+          item.product.id === product.id
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        )
+      }
+      return [...prev, { product, quantity: 1 }]
+    })
   }
 
   const removeItem = (productId: string) => {
-    const existing = selectedItems.find(item => item.product.id === productId)
-    if (existing && existing.quantity > 1) {
-      setSelectedItems(selectedItems.map(item =>
-        item.product.id === productId
-          ? { ...item, quantity: item.quantity - 1 }
-          : item
-      ))
-    } else {
-      setSelectedItems(selectedItems.filter(item => item.product.id !== productId))
-    }
+    setSelectedItems(prev => {
+      const existing = prev.find(item => item.product.id === productId)
+      if (existing && existing.quantity > 1) {
+        return prev.map(item =>
+          item.product.id === productId
+            ? { ...item, quantity: item.quantity - 1 }
+            : item
+        )
+      }
+      return prev.filter(item => item.product.id !== productId)
+    })
   }
 
   const clearItems = () => {
@@ -253,6 +256,7 @@ export default function OptimizePage() {
     setSavedSnapshot(null)
     setSaveFeedback(null)
     setOptimizeError(null)
+    setOptimizeNotice(null)
   }
 
   const savePlan = async () => {
@@ -268,6 +272,7 @@ export default function OptimizePage() {
     setIsSaving(true)
     setSaveFeedback(null)
     setOptimizeError(null)
+    setOptimizeNotice(null)
     try {
       const validSelected = selectedItems
         .filter(it => it.quantity > 0)
@@ -350,6 +355,7 @@ export default function OptimizePage() {
     setIsOptimizing(true)
     setOptimizeError(null)
     setSaveFeedback(null)
+    setOptimizeNotice(null)
     try {
       const validSelected = selectedItems
         .filter(it => it.quantity > 0)
@@ -428,12 +434,26 @@ export default function OptimizePage() {
       }
 
       setOptimizationResult(result)
+      const requestedCount = validSelected.reduce(
+        (sum: number, it: SelectedItem) => sum + Number(it.quantity ?? 0),
+        0
+      )
+      const placedCount = placedItems.reduce(
+        (sum: number, it: { quantity: number }) => sum + Number(it.quantity ?? 1),
+        0
+      )
+      if (placedCount < requestedCount) {
+        setOptimizeNotice(`Se acomodaron ${placedCount} de ${requestedCount} productos. ${requestedCount - placedCount} no caben con las restricciones actuales.`)
+      } else {
+        setOptimizeNotice(null)
+      }
       setOptimizedSnapshot(configSnapshot)
     } catch (e) {
       console.error('Error optimizando:', e)
       setOptimizationResult(null)
       setOptimizedSnapshot(null)
       setOptimizeError(e instanceof Error ? e.message : 'Error desconocido')
+      setOptimizeNotice(null)
     } finally {
       setIsOptimizing(false)
     }
@@ -538,6 +558,13 @@ const cubesForVisualizer = useMemo(() => {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm text-red-600">{optimizeError}</p>
+              </CardContent>
+            </Card>
+          )}
+          {optimizeNotice && (
+            <Card>
+              <CardContent className="pt-6">
+                <p className="text-sm text-amber-700">{optimizeNotice}</p>
               </CardContent>
             </Card>
           )}

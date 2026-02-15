@@ -29,6 +29,12 @@ type PlanItem = {
   } | null
 }
 
+type PlanInstruction = {
+  id: string
+  step: number
+  position?: any
+}
+
 type LoadPlan = {
   id: string
   name: string
@@ -46,6 +52,7 @@ type LoadPlan = {
     unitNumber?: string | null
   } | null
   items: PlanItem[]
+  instructions?: PlanInstruction[]
 }
 
 export default function LoadPlan3DViewPage() {
@@ -96,6 +103,42 @@ export default function LoadPlan3DViewPage() {
   }, [plan])
 
   const cubes = useMemo(() => {
+    const fromInstructions = (plan?.instructions ?? [])
+      .map((ins, idx) => {
+        const pos = ins?.position as any
+        const product = pos?.product
+        if (!pos || !product) return null
+
+        // Algorithm: X=lateral, Y=height, Z=advance
+        // Visualizer: X=advance, Y=height, Z=lateral
+        const algoX = Number(pos.x ?? 0)
+        const algoY = Number(pos.y ?? 0)
+        const algoZ = Number(pos.z ?? 0)
+        const rotDeg = Number(pos.rotation?.y ?? 0)
+        const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
+
+        return {
+          id: `ins-${ins.step}-${idx}`,
+          x: algoZ,
+          y: algoY,
+          z: algoX,
+          width: Number(product.width ?? 0),
+          height: Number(product.height ?? 0),
+          depth: Number(product.length ?? product.depth ?? 0),
+          rotY,
+          color: getCategoryColor(String(product.category ?? 'generales')),
+          name: String(product.name ?? 'Producto'),
+          weightKg: Number(product.weight ?? 0),
+          product,
+        }
+      })
+      .filter(Boolean) as any[]
+
+    if (fromInstructions.length > 0) {
+      return fromInstructions
+    }
+
+    // Legacy fallback for old plans without per-piece instructions.
     const items = plan?.items ?? []
     const out: any[] = []
 
@@ -103,26 +146,34 @@ export default function LoadPlan3DViewPage() {
       if (!it?.product) return
       const p = it.product
       const qty = Number(it.quantity ?? 1)
+
+      const width = Math.max(1, Number(p.width ?? 0))
+      const height = Math.max(1, Number(p.height ?? 0))
+      const depth = Math.max(1, Number(p.length ?? 0))
+      const maxCols = Math.max(1, Math.floor((container?.width ?? 0) / width))
+      const maxRows = Math.max(1, Math.floor((container?.depth ?? 0) / depth))
+      const perLayer = Math.max(1, maxCols * maxRows)
+      const rotDeg = Number(it.rotationY ?? 0)
+      const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
+
       for (let q = 0; q < Math.max(qty, 1); q++) {
-        // Si el backend guarda una sola posición para el item pero quantity > 1,
-        // generamos instancias separadas con un pequeño offset para evitar que se encimen.
-        // Algoritmo guarda: X=lateral, Y=alto, Z=avance.
-        // Visualizador usa: X=avance, Y=alto, Z=lateral.
-        const algoX = Number(it.positionX ?? 0)
-        const algoY = Number(it.positionY ?? 0)
-        const algoZ = Number(it.positionZ ?? 0)
-        const gap = 2
-        const stepAdvance = Number(p.length ?? 0) + gap
-        const rotDeg = Number(it.rotationY ?? 0)
-        const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
+        const layer = Math.floor(q / perLayer)
+        const indexInLayer = q % perLayer
+        const col = indexInLayer % maxCols
+        const row = Math.floor(indexInLayer / maxCols)
+
+        const algoX = col * width
+        const algoY = layer * height
+        const algoZ = row * depth
+
         out.push({
           id: `${p.id}-${idx}-${q}`,
-          x: algoZ + (q * stepAdvance),
+          x: algoZ,
           y: algoY,
           z: algoX,
-          width: Number(p.width ?? 0),
-          height: Number(p.height ?? 0),
-          depth: Number(p.length ?? 0),
+          width,
+          height,
+          depth,
           rotY,
           color: getCategoryColor(String(p.category ?? 'generales')),
           name: String(p.name ?? 'Producto'),
@@ -133,7 +184,7 @@ export default function LoadPlan3DViewPage() {
     })
 
     return out
-  }, [plan])
+  }, [plan, container])
 
   const downloadPdf = async () => {
     if (!plan?.id) return
@@ -155,19 +206,19 @@ export default function LoadPlan3DViewPage() {
       const totalWeight = Number(plan.totalWeight ?? 0)
       const util = Number(plan.spaceUtilization ?? 0)
       doc.text(`Peso total: ${(totalWeight / 1000).toFixed(2)} ton`, 14, 50)
-      doc.text(`Utilización: ${util.toFixed(1)}%`, 14, 56)
+      doc.text(`Utilizacion: ${util.toFixed(1)}%`, 14, 56)
 
       const rows = (plan.items ?? []).map((it: any) => {
         const p = it.product ?? {}
         const qty = Number(it.quantity ?? 0)
         const w = Number(p.weight ?? 0)
-        const dims = `${p.length ?? '-'}×${p.width ?? '-'}×${p.height ?? '-'}`
+        const dims = `${p.length ?? '-'}x${p.width ?? '-'}x${p.height ?? '-'}`
         return [String(p.name ?? 'Producto'), String(p.category ?? '-'), String(qty), `${w} kg`, dims]
       })
 
       autoTable(doc, {
         startY: 64,
-        head: [['Producto', 'Categoría', 'Cantidad', 'Peso', 'Dimensiones (cm)']],
+        head: [['Producto', 'Categoria', 'Cantidad', 'Peso', 'Dimensiones (cm)']],
         body: rows.length ? rows : [['(Sin productos)', '-', '-', '-', '-']],
         styles: { fontSize: 9 },
         headStyles: { fontStyle: 'bold' },
@@ -181,7 +232,7 @@ export default function LoadPlan3DViewPage() {
     }
   }
 
-  if (loading) return <div className="p-6">Cargando plan…</div>
+  if (loading) return <div className="p-6">Cargando plan...</div>
   if (error) return <div className="p-6 text-red-600">{error}</div>
   if (!plan || !container) return <div className="p-6">Plan no disponible.</div>
 
@@ -207,7 +258,7 @@ export default function LoadPlan3DViewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Visualización 3D</CardTitle>
+          <CardTitle>Visualizacion 3D</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <LoadVisualizer3D container={container} cubes={cubes} />

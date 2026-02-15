@@ -21,7 +21,9 @@ export async function GET(
           columns: { id: true, name: true, email: true },
         },
         items: { with: { product: true } },
-        instructions: true,
+        instructions: {
+          orderBy: (instructions, { asc }) => [asc(instructions.step)],
+        },
       },
     })
 

@@ -116,42 +116,73 @@ export async function POST(
       vehicleForOptimization
     )
 
-    // Actualizar items con posiciones calculadas
-    for (let i = 0; i < optimizationResult.placedItems.length; i++) {
-      const placedItem = optimizationResult.placedItems[i]
-      const item = loadPlan.items.find(
-        (li) => li.productId === placedItem.product.id
-      )
-
-      if (item) {
-        await db.update(loadPlanItems)
-          .set({
-            positionX: placedItem.position.x,
-            positionY: placedItem.position.y,
-            positionZ: placedItem.position.z,
-            rotationX: placedItem.rotation.x,
-            rotationY: placedItem.rotation.y,
-            rotationZ: placedItem.rotation.z,
-            loadingOrder: i + 1,
-          })
-          .where(eq(loadPlanItems.id, item.id))
-      }
-    }
-
     // Eliminar instrucciones anteriores
     await db.delete(loadingInstructions)
       .where(eq(loadingInstructions.loadPlanId, id))
 
-    // Crear nuevas instrucciones
-    for (const instruction of optimizationResult.instructions) {
+    // Persistir posiciones por pieza en instrucciones
+    const itemByProductId = new Map(
+      loadPlan.items.map(item => [item.productId, item] as const)
+    )
+    const firstPlacementByItemId = new Map<string, {
+      position: { x: number; y: number; z: number }
+      rotation: { x: number; y: number; z: number }
+      loadingOrder: number
+    }>()
+
+    for (let i = 0; i < optimizationResult.placedItems.length; i++) {
+      const placedItem = optimizationResult.placedItems[i]
+      const loadItem = itemByProductId.get(placedItem.product.id)
+
+      if (loadItem?.id && !firstPlacementByItemId.has(loadItem.id)) {
+        firstPlacementByItemId.set(loadItem.id, {
+          position: placedItem.position,
+          rotation: placedItem.rotation,
+          loadingOrder: i + 1,
+        })
+      }
+
+      const positionPayload = {
+        x: placedItem.position.x,
+        y: placedItem.position.y,
+        z: placedItem.position.z,
+        rotation: placedItem.rotation,
+        product: {
+          id: placedItem.product.id,
+          name: placedItem.product.name,
+          category: placedItem.product.category,
+          width: placedItem.product.width,
+          height: placedItem.product.height,
+          length: placedItem.product.length,
+          weight: placedItem.product.weight,
+        },
+      }
+
       await db.insert(loadingInstructions)
         .values({
           loadPlanId: id,
-          step: instruction.step,
-          description: instruction.description,
-          position: instruction.position,
+          step: i + 1,
+          description: `Colocar ${placedItem.product.name} en posición (${placedItem.position.x.toFixed(0)}, ${placedItem.position.y.toFixed(0)}, ${placedItem.position.z.toFixed(0)})`,
+          itemId: loadItem?.id ?? null,
+          position: positionPayload,
           orientation: 'horizontal',
         })
+    }
+
+    // Mantener una posición de referencia por renglón de load_plan_items (compatibilidad)
+    for (const item of loadPlan.items) {
+      const first = firstPlacementByItemId.get(item.id)
+      await db.update(loadPlanItems)
+        .set({
+          positionX: first?.position.x ?? null,
+          positionY: first?.position.y ?? null,
+          positionZ: first?.position.z ?? null,
+          rotationX: first?.rotation.x ?? 0,
+          rotationY: first?.rotation.y ?? 0,
+          rotationZ: first?.rotation.z ?? 0,
+          loadingOrder: first?.loadingOrder ?? null,
+        })
+        .where(eq(loadPlanItems.id, item.id))
     }
 
     // Actualizar plan de carga con resultados

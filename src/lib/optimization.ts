@@ -9,13 +9,6 @@ const FRAGILITY_ORDER: Record<string, number> = {
   muy_alta: 3,
 }
 
-const FRAGILITY_SUPPORT_FACTOR: Record<string, number> = {
-  baja: 2.5,
-  media: 1.5,
-  alta: 0.8,
-  muy_alta: 0.25,
-}
-
 const FRAGILITY_DEFAULT_STACK_HEIGHT: Record<string, number> = {
   baja: 4,
   media: 3,
@@ -68,7 +61,6 @@ interface PlacedItem extends BinPackingItem {
   position: Position
   rotation: { x: number; y: number; z: number }
   stackLevel: number
-  loadAboveWeight: number
   placedDims: { w: number; h: number; d: number }
 }
 
@@ -77,6 +69,7 @@ export class BinPacking3D {
   private container: { width: number; height: number; depth: number }
   private items: BinPackingItem[]
   private placedItems: PlacedItem[]
+  private preferredRotationByProductId: Map<string, number>
   private maxWeight: number
   private currentWeight: number
   private spaceMap: number[][][]
@@ -90,6 +83,7 @@ export class BinPacking3D {
     this.container = { width: containerWidth, height: containerHeight, depth: containerDepth }
     this.items = []
     this.placedItems = []
+    this.preferredRotationByProductId = new Map()
     this.maxWeight = maxWeight
     this.currentWeight = 0
 
@@ -147,7 +141,6 @@ export class BinPacking3D {
       position: bestPlacement.position,
       rotation: bestPlacement.rotation.rotation,
       stackLevel: bestPlacement.stackLevel,
-      loadAboveWeight: 0,
       placedDims: {
         w: bestPlacement.rotation.w,
         h: bestPlacement.rotation.h,
@@ -158,15 +151,8 @@ export class BinPacking3D {
     this.placedItems.push(placedItem)
     this.currentWeight += item.weight
     this.markSpaceAsOccupied(bestPlacement.grid, placedIndex)
-
-    if (bestPlacement.supporterIds.length > 0) {
-      const distributedLoad = item.weight / bestPlacement.supporterIds.length
-      for (const supporterId of bestPlacement.supporterIds) {
-        const supporter = this.placedItems[supporterId]
-        if (supporter) {
-          supporter.loadAboveWeight += distributedLoad
-        }
-      }
+    if (!this.preferredRotationByProductId.has(item.product.id)) {
+      this.preferredRotationByProductId.set(item.product.id, bestPlacement.rotation.rotation.y)
     }
 
     return true
@@ -196,7 +182,12 @@ export class BinPacking3D {
             const candidate = this.evaluatePlacement(item, position, rotation)
             if (!candidate) continue
 
-            const score = y * 100000 + z * 100 + x
+            // Prioridad de acomodo:
+            // 1) mantener la misma linea de avance (z)
+            // 2) llenar capas en esa linea (y)
+            // 3) despues abrir lateral (x)
+            // Esto evita que todo se quede en piso y crea capas por linea.
+            const score = z * 1_000_000 + y * 1_000 + x
             if (score < bestScore) {
               bestScore = score
               best = candidate
@@ -242,7 +233,6 @@ export class BinPacking3D {
     const supporters = Array.from(supporterIds)
     if (supporters.length === 0) return null
 
-    const distributedLoad = item.weight / supporters.length
     let stackLevel = 1
 
     for (const supporterId of supporters) {
@@ -260,9 +250,6 @@ export class BinPacking3D {
 
       if (!this.canPlaceByFragility(supporter.product.fragility, item.product.fragility)) return null
 
-      const capacity = supporter.weight * this.getSupportFactor(supporter.product.fragility)
-      if (supporter.loadAboveWeight + distributedLoad > capacity) return null
-
       stackLevel = Math.max(stackLevel, nextLevel)
     }
 
@@ -276,7 +263,7 @@ export class BinPacking3D {
   }
 
   private getRotations(item: BinPackingItem): RotationVariant[] {
-    const rotations: RotationVariant[] = [
+    const allRotations: RotationVariant[] = [
       {
         w: item.width,
         h: item.height,
@@ -286,7 +273,7 @@ export class BinPacking3D {
     ]
 
     if (item.width !== item.depth) {
-      rotations.push({
+      allRotations.push({
         w: item.depth,
         h: item.height,
         d: item.width,
@@ -294,7 +281,11 @@ export class BinPacking3D {
       })
     }
 
-    return rotations
+    const preferred = this.preferredRotationByProductId.get(item.product.id)
+    if (preferred === undefined) return allRotations
+
+    const preferredRotations = allRotations.filter(r => r.rotation.y === preferred)
+    return preferredRotations.length > 0 ? preferredRotations : allRotations
   }
 
   private toGridBounds(position: Position, rotation: RotationVariant): GridBounds | null {
@@ -336,10 +327,6 @@ export class BinPacking3D {
 
   private getFragilityRank(fragility: FragilityValue): number {
     return FRAGILITY_ORDER[String(fragility ?? 'media')] ?? FRAGILITY_ORDER.media
-  }
-
-  private getSupportFactor(fragility: FragilityValue): number {
-    return FRAGILITY_SUPPORT_FACTOR[String(fragility ?? 'media')] ?? FRAGILITY_SUPPORT_FACTOR.media
   }
 
   private getDefaultStackHeightByFragility(fragility: FragilityValue): number {

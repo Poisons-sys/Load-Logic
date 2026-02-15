@@ -328,7 +328,7 @@ function Container({ width, height, depth }: Container3DProps) {
       {/* Floor */}
       <mesh position={[0, -0.5, 0]} receiveShadow>
         <boxGeometry args={[width, 1, depth]} />
-        <meshStandardMaterial color="#2C2C2C" metalness={0.3} roughness={0.7} />
+        <meshStandardMaterial side={THREE.FrontSide} color="#2C2C2C" metalness={0.3} roughness={0.7} />
       </mesh>
 
       {/* Back wall */}
@@ -519,6 +519,7 @@ export default function LoadVisualizer3D({
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const orbitRef = useRef<any>(null);
+  const [layoutNotice, setLayoutNotice] = useState<string | null>(null);
 
   const [items, setItems] = useState<Cube3DData[]>([]);
   const [editMode, setEditMode] = useState(false);
@@ -617,23 +618,100 @@ export default function LoadVisualizer3D({
     }
   };
 
-  //  Rotación REAL: solo rotY (NO swap dims)
-  //  y reacomoda todo como EasyCargo tras rotar
+  // Local rotate helpers (EasyCargo-style): rotate selected cube only.
+  const collidesWithOthers = useCallback(
+    (candidate: Cube3DData, others: Cube3DData[]) => {
+      const bb = aabbCentered(candidate, container);
+      for (const other of others) {
+        if (bb.intersectsBox(aabbCentered(other, container))) return true;
+      }
+      return false;
+    },
+    [container]
+  );
+
+  const tryRotateWithoutRepack = useCallback(
+    (selected: Cube3DData, others: Cube3DData[]) => {
+      const rotatedRaw: Cube3DData = {
+        ...selected,
+        rotY: normRotY((selected.rotY ?? 0) + Math.PI / 2),
+      };
+      const rotated = clampCubeInsideContainer(
+        {
+          ...rotatedRaw,
+          x: snap(rotatedRaw.x),
+          y: snap(rotatedRaw.y),
+          z: snap(rotatedRaw.z),
+        },
+        container
+      );
+
+      if (!collidesWithOthers(rotated, others)) return rotated;
+
+      const stacked = clampCubeInsideContainer(
+        { ...rotated, y: snap(findStackY(rotated, others, container)) },
+        container
+      );
+      if (!collidesWithOthers(stacked, others)) return stacked;
+
+      const step = Math.max(1, SNAP_STEP);
+      const maxRadius = Math.max(rotated.width, rotated.depth) + GAP * 4;
+      for (let radius = step; radius <= maxRadius; radius += step) {
+        const offsets: Array<[number, number]> = [
+          [radius, 0],
+          [-radius, 0],
+          [0, radius],
+          [0, -radius],
+          [radius, radius],
+          [radius, -radius],
+          [-radius, radius],
+          [-radius, -radius],
+        ];
+
+        for (const [dx, dz] of offsets) {
+          const moved = clampCubeInsideContainer(
+            {
+              ...rotated,
+              x: snap(selected.x + dx),
+              y: snap(selected.y),
+              z: snap(selected.z + dz),
+            },
+            container
+          );
+          if (!collidesWithOthers(moved, others)) return moved;
+
+          const movedStacked = clampCubeInsideContainer(
+            { ...moved, y: snap(findStackY(moved, others, container)) },
+            container
+          );
+          if (!collidesWithOthers(movedStacked, others)) return movedStacked;
+        }
+      }
+
+      return null;
+    },
+    [collidesWithOthers, container]
+  );
+
+  // Rotate only the selected cube. Never re-pack all cargo.
   const rotateSelected90 = () => {
     if (!selectedId) return;
 
     setItems((prev) => {
-      const rotatedList = prev.map((c) => {
-        if (c.id !== selectedId) return c;
-        const rot = (c.rotY ?? 0) + Math.PI / 2;
-        const rotated: Cube3DData = { ...c, rotY: rot % (Math.PI * 2) };
-        return clampCubeInsideContainer(rotated, container);
-      });
+      const selected = prev.find((c) => c.id === selectedId);
+      if (!selected) return prev;
 
-      const packed = packEasyCargoRows(rotatedList, container);
+      const others = prev.filter((c) => c.id !== selectedId);
+      const rotated = tryRotateWithoutRepack(selected, others);
+      if (!rotated) {
+        setLayoutNotice("No se pudo rotar esa caja sin colisionar. Muevela un poco e intenta de nuevo.");
+        return prev;
+      }
 
-      onCubesChange?.(packed);
-      return packed;
+      const next = prev.map((c) => (c.id === selectedId ? rotated : c));
+      setLayoutNotice(null);
+      onCubesChange?.(next);
+      return next;
     });
   };
 
@@ -641,6 +719,7 @@ export default function LoadVisualizer3D({
     const safe = clampCubeInsideContainer(nextCube, container);
     setItems((prev) => {
       const next = prev.map((c) => (c.id === safe.id ? safe : c));
+      setLayoutNotice(null);
       onCubesChange?.(next);
       return next;
     });
@@ -750,6 +829,11 @@ export default function LoadVisualizer3D({
         </div>
 
         <div className="mt-4">
+          {layoutNotice && (
+            <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {layoutNotice}
+            </div>
+          )}
           {!selectedCube ? (
             <div className="text-sm text-gray-500">
               Selecciona una caja en el visor para ver sus detalles.
