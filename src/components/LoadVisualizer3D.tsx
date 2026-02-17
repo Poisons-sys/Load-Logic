@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import React, { Fragment, useEffect, useMemo, useState, useRef, useCallback } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, TransformControls } from "@react-three/drei";
@@ -48,6 +48,8 @@ type Props = {
   onCubeClick?: (cube: Cube3DData) => void;
   onCubesChange?: (cubes: Cube3DData[]) => void;
 };
+
+type CubeUpdateMode = "preview" | "commit";
 
 const SNAP_STEP = 1;
 const GAP = 2;
@@ -178,6 +180,13 @@ function aabbCentered(cube: Cube3DData, container: Container3DProps) {
   );
 }
 
+function boxesOverlap(a: THREE.Box3, b: THREE.Box3, eps = 0.001) {
+  const overlapX = a.min.x < b.max.x - eps && a.max.x > b.min.x + eps;
+  const overlapY = a.min.y < b.max.y - eps && a.max.y > b.min.y + eps;
+  const overlapZ = a.min.z < b.max.z - eps && a.max.z > b.min.z + eps;
+  return overlapX && overlapY && overlapZ;
+}
+
 function findStackY(candidate: Cube3DData, others: Cube3DData[], container: Container3DProps) {
   const candBox = aabbCentered(candidate, container);
   const candMin = candBox.min;
@@ -193,11 +202,9 @@ function findStackY(candidate: Cube3DData, others: Cube3DData[], container: Cont
     if (!overlapX || !overlapZ) continue;
 
     const topY = o.y + o.height;
-    if (topY <= candidate.y + candidate.height + 1e-6) {
-      bestTopY = Math.max(bestTopY, topY);
-    }
+    bestTopY = Math.max(bestTopY, topY);
   }
-  return bestTopY;
+  return clamp(bestTopY, 0, Math.max(0, container.height - candidate.height));
 }
 
 function autoResolveOverlaps(input: Cube3DData[], container: Container3DProps) {
@@ -207,7 +214,7 @@ function autoResolveOverlaps(input: Cube3DData[], container: Container3DProps) {
   const intersectsAny = (c: Cube3DData) => {
     const bb = aabbCentered(c, container);
     for (const p of placed) {
-      if (bb.intersectsBox(aabbCentered(p, container))) return true;
+      if (boxesOverlap(bb, aabbCentered(p, container))) return true;
     }
     return false;
   };
@@ -402,7 +409,6 @@ function ProductCube({
   isSelected,
   editable,
   onUpdate,
-  allCubes,
   onTransformingChange,
 }: {
   cube: Cube3DData;
@@ -410,12 +416,12 @@ function ProductCube({
   onClick?: (cube: Cube3DData) => void;
   isSelected?: boolean;
   editable?: boolean;
-  onUpdate?: (next: Cube3DData) => void;
-  allCubes: Cube3DData[];
+  onUpdate?: (next: Cube3DData, mode: CubeUpdateMode) => void;
   onTransformingChange?: (v: boolean) => void;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const meshRef = useRef<THREE.Mesh | null>(null);
   const controlsRef = useRef<any>(null);
+  const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
   const { camera, gl } = useThree();
 
   const position = useMemo(() => cubeToCenteredPos(cube, container), [cube, container]);
@@ -424,61 +430,63 @@ function ProductCube({
   const baseColor = cube.color ?? "#3B82F6";
   const color = isSelected ? "#60A5FA" : baseColor;
 
-  const collides = useCallback(
-    (candidate: Cube3DData) => {
-      const bb = aabbCentered(candidate, container);
-      for (const other of allCubes) {
-        if (other.id === candidate.id) continue;
-        if (bb.intersectsBox(aabbCentered(other, container))) return true;
-      }
-      return false;
-    },
-    [allCubes, container]
-  );
+  const readClampedMeshCube = useCallback(() => {
+    const m = meshRef.current;
+    if (!m) return null;
+
+    const raw = centeredPosToCubeXYZ(m.position, cube, container);
+
+    const next: Cube3DData = clampCubeInsideContainer({
+      ...cube,
+      x: snap(raw.x),
+      y: snap(raw.y),
+      z: snap(raw.z),
+    }, container);
+
+    return next;
+  }, [container, cube]);
 
   const handleObjectChange = useCallback(() => {
     const m = meshRef.current;
     if (!m) return;
 
-    const raw = centeredPosToCubeXYZ(m.position, cube, container);
+    const next = readClampedMeshCube();
+    if (!next) return;
 
-    let next: Cube3DData = {
-      ...cube,
-      x: snap(raw.x),
-      y: snap(raw.y),
-      z: snap(raw.z),
-    };
-
-    const baseY = findStackY(next, allCubes, container);
-    next.y = snap(baseY);
-
-    next = clampCubeInsideContainer(next, container);
-
-    if (collides(next)) {
-      const [px, py, pz] = cubeToCenteredPos(cube, container);
-      m.position.set(px, py, pz);
-      m.rotation.set(0, cube.rotY ?? 0, 0);
-      return;
-    }
-
-    onUpdate?.(next);
-  }, [allCubes, collides, container, cube, onUpdate]);
+    // Forzar el mesh a la posición válida para no salirse del contenedor.
+    const [px, py, pz] = cubeToCenteredPos(next, container);
+    m.position.set(px, py, pz);
+    onUpdate?.(next, "preview");
+  }, [container, onUpdate, readClampedMeshCube]);
 
   useEffect(() => {
     const tc = controlsRef.current;
     if (!tc || !editable || !isSelected) return;
 
-    const onDrag = (e: any) => onTransformingChange?.(!!e?.value);
+    const onDrag = (e: any) => {
+      const dragging = !!e?.value;
+      onTransformingChange?.(dragging);
+      if (dragging) return;
+
+      const next = readClampedMeshCube();
+      if (!next) return;
+      onUpdate?.(next, "commit");
+    };
     tc.addEventListener?.("dragging-changed", onDrag);
 
     return () => {
       tc.removeEventListener?.("dragging-changed", onDrag);
     };
-  }, [editable, isSelected, onTransformingChange]);
+  }, [editable, isSelected, onTransformingChange, onUpdate, readClampedMeshCube]);
+
+  const bindMeshRef = useCallback((node: THREE.Mesh | null) => {
+    meshRef.current = node;
+    setMeshObject(node);
+  }, []);
 
   const MeshEl = (
     <mesh
-      ref={meshRef}
+      ref={bindMeshRef}
       position={position as any}
       rotation={rotation as any}
       castShadow
@@ -495,19 +503,22 @@ function ProductCube({
 
   if (editable && isSelected) {
     return (
-      <TransformControls
-        ref={controlsRef}
-        camera={camera}
-        domElement={gl.domElement}
-        mode="translate"
-        showX
-        showY
-        showZ
-        translationSnap={SNAP_STEP}
-        onObjectChange={handleObjectChange}
-      >
+      <Fragment>
         {MeshEl}
-      </TransformControls>
+        {meshObject && (
+          <TransformControls
+            ref={controlsRef}
+            object={meshObject as any}
+            camera={camera}
+            domElement={gl.domElement}
+            mode="translate"
+            showX
+            showY
+            showZ
+            onObjectChange={handleObjectChange}
+          />
+        )}
+      </Fragment>
     );
   }
 
@@ -530,6 +541,7 @@ export default function LoadVisualizer3D({
   const [items, setItems] = useState<Cube3DData[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
+  const shouldEmitChangesRef = useRef(false);
 
   // evitar que se quede pegado si se pierde mouseUp/touchEnd
   useEffect(() => {
@@ -551,8 +563,14 @@ export default function LoadVisualizer3D({
   // If cubes already include calculated coordinates, preserve them.
   // Otherwise, fallback to auto-packing rows.
   useEffect(() => {
+    const containerBounds = {
+      width: container.width,
+      height: container.height,
+      depth: container.depth,
+    };
+
     const normalized = (cubes ?? []).map((c) =>
-      clampCubeInsideContainer(normalizeCubeXYZ(c, container), container)
+      clampCubeInsideContainer(normalizeCubeXYZ(c, containerBounds), containerBounds)
     );
 
     const hasExplicitLayout = normalized.some(
@@ -564,14 +582,14 @@ export default function LoadVisualizer3D({
       return;
     }
 
-    setItems(packEasyCargoRows(normalized, container));
+    setItems(packEasyCargoRows(normalized, containerBounds));
   }, [cubes, container.width, container.height, container.depth]);
 
   useEffect(() => {
-    if (editMode && !selectedId && items.length > 0) {
-      setSelectedId(items[0].id);
-    }
-  }, [editMode, selectedId, items]);
+    if (!shouldEmitChangesRef.current) return;
+    shouldEmitChangesRef.current = false;
+    onCubesChange?.(items);
+  }, [items, onCubesChange]);
 
   const selectedCube = useMemo(
     () => items.find((c) => c.id === selectedId) ?? null,
@@ -629,11 +647,160 @@ export default function LoadVisualizer3D({
     (candidate: Cube3DData, others: Cube3DData[]) => {
       const bb = aabbCentered(candidate, container);
       for (const other of others) {
-        if (bb.intersectsBox(aabbCentered(other, container))) return true;
+        if (boxesOverlap(bb, aabbCentered(other, container))) return true;
       }
       return false;
     },
     [container]
+  );
+
+  const getCollisions = useCallback(
+    (candidate: Cube3DData, others: Cube3DData[]) => {
+      const bb = aabbCentered(candidate, container);
+      return others.filter((other) => boxesOverlap(bb, aabbCentered(other, container)));
+    },
+    [container]
+  );
+
+  const normalizeManualPlacement = useCallback(
+    (candidate: Cube3DData) =>
+      clampCubeInsideContainer(
+        {
+          ...candidate,
+          x: snap(candidate.x),
+          y: snap(candidate.y),
+          z: snap(candidate.z),
+        },
+        container
+      ),
+    [container]
+  );
+
+  const tryAtAnchor = useCallback(
+    (
+      cube: Cube3DData,
+      occupied: Cube3DData[],
+      anchor: { x: number; y?: number; z: number },
+      seen: Set<string>
+    ) => {
+      const base = normalizeManualPlacement({
+        ...cube,
+        x: anchor.x,
+        y: anchor.y ?? cube.y,
+        z: anchor.z,
+      });
+      const keyBase = `${base.x}|${base.y}|${base.z}|${normRotY(base.rotY)}`;
+      if (seen.has(keyBase)) return null;
+      seen.add(keyBase);
+
+      const variants: Cube3DData[] = [base];
+
+      if (Math.abs(base.y) > 0.001) {
+        variants.push(normalizeManualPlacement({ ...base, y: 0 }));
+      }
+
+      const stackedY = snap(findStackY(base, occupied, container));
+      if (Math.abs(stackedY - base.y) > 0.001) {
+        variants.push(normalizeManualPlacement({ ...base, y: stackedY }));
+      }
+
+      for (const variant of variants) {
+        if (!collidesWithOthers(variant, occupied)) return variant;
+      }
+      return null;
+    },
+    [collidesWithOthers, container, normalizeManualPlacement]
+  );
+
+  const findNearestFreeSlot = useCallback(
+    (cube: Cube3DData, occupied: Cube3DData[], preferred: Array<{ x: number; y?: number; z: number }>) => {
+      const seen = new Set<string>();
+
+      for (const anchor of preferred) {
+        const placed = tryAtAnchor(cube, occupied, anchor, seen);
+        if (placed) return placed;
+      }
+
+      const candidateFp = effectiveFootprint(cube);
+      const adjacencyAnchors: Array<{ x: number; y?: number; z: number }> = [];
+      for (const occ of occupied) {
+        const occFp = effectiveFootprint(occ);
+        adjacencyAnchors.push(
+          { x: occ.x - candidateFp.d - GAP, y: occ.y, z: occ.z },
+          { x: occ.x + occFp.d + GAP, y: occ.y, z: occ.z },
+          { x: occ.x, y: occ.y, z: occ.z - candidateFp.w - GAP },
+          { x: occ.x, y: occ.y, z: occ.z + occFp.w + GAP },
+          { x: occ.x - candidateFp.d - GAP, y: occ.y, z: occ.z - candidateFp.w - GAP },
+          { x: occ.x + occFp.d + GAP, y: occ.y, z: occ.z + occFp.w + GAP },
+          { x: occ.x - candidateFp.d - GAP, y: occ.y, z: occ.z + occFp.w + GAP },
+          { x: occ.x + occFp.d + GAP, y: occ.y, z: occ.z - candidateFp.w - GAP }
+        );
+      }
+
+      for (const anchor of adjacencyAnchors) {
+        const placed = tryAtAnchor(cube, occupied, anchor, seen);
+        if (placed) return placed;
+      }
+
+      const maxX = Math.max(0, container.depth - candidateFp.d);
+      const maxZ = Math.max(0, container.width - candidateFp.w);
+      const stepX = Math.max(SNAP_STEP, Math.floor(candidateFp.d / 2), 1);
+      const stepZ = Math.max(SNAP_STEP, Math.floor(candidateFp.w / 2), 1);
+      const yLevels = Array.from(new Set([cube.y, 0]));
+
+      for (const y of yLevels) {
+        for (let x = 0; x <= maxX; x += stepX) {
+          for (let z = 0; z <= maxZ; z += stepZ) {
+            const placed = tryAtAnchor(cube, occupied, { x, y, z }, seen);
+            if (placed) return placed;
+          }
+        }
+      }
+
+      return null;
+    },
+    [container.depth, container.width, tryAtAnchor]
+  );
+
+  const reflowAfterMove = useCallback(
+    (movingFrom: Cube3DData, movingTo: Cube3DData, others: Cube3DData[]) => {
+      const safeMoving = normalizeManualPlacement(movingTo);
+      if (!collidesWithOthers(safeMoving, others)) {
+        return { moving: safeMoving, others };
+      }
+
+      let relocatedOthers = [...others];
+      const initialCollisions = getCollisions(safeMoving, relocatedOthers).sort((a, b) => {
+        const da = Math.abs(a.x - safeMoving.x) + Math.abs(a.y - safeMoving.y) + Math.abs(a.z - safeMoving.z);
+        const db = Math.abs(b.x - safeMoving.x) + Math.abs(b.y - safeMoving.y) + Math.abs(b.z - safeMoving.z);
+        return da - db;
+      });
+
+      for (let i = 0; i < initialCollisions.length; i++) {
+        const blockedId = initialCollisions[i]?.id;
+        if (!blockedId) continue;
+        const blocked = relocatedOthers.find((c) => c.id === blockedId);
+        if (!blocked) continue;
+
+        const withoutBlocked = relocatedOthers.filter((c) => c.id !== blocked.id);
+        const preferredAnchors =
+          i === 0
+            ? [
+                { x: movingFrom.x, y: movingFrom.y, z: movingFrom.z },
+                { x: blocked.x, y: blocked.y, z: blocked.z },
+              ]
+            : [{ x: blocked.x, y: blocked.y, z: blocked.z }];
+
+        const relocated = findNearestFreeSlot(blocked, [safeMoving, ...withoutBlocked], preferredAnchors);
+        if (!relocated) return null;
+
+        relocatedOthers = [...withoutBlocked, relocated];
+      }
+
+      if (collidesWithOthers(safeMoving, relocatedOthers)) return null;
+      return { moving: safeMoving, others: relocatedOthers };
+    },
+    [collidesWithOthers, findNearestFreeSlot, getCollisions, normalizeManualPlacement]
   );
 
   const tryRotateWithoutRepack = useCallback(
@@ -642,15 +809,7 @@ export default function LoadVisualizer3D({
         ...selected,
         rotY: normRotY((selected.rotY ?? 0) + Math.PI / 2),
       };
-      const rotated = clampCubeInsideContainer(
-        {
-          ...rotatedRaw,
-          x: snap(rotatedRaw.x),
-          y: snap(rotatedRaw.y),
-          z: snap(rotatedRaw.z),
-        },
-        container
-      );
+      const rotated = normalizeManualPlacement(rotatedRaw);
 
       if (!collidesWithOthers(rotated, others)) return rotated;
 
@@ -675,15 +834,12 @@ export default function LoadVisualizer3D({
         ];
 
         for (const [dx, dz] of offsets) {
-          const moved = clampCubeInsideContainer(
-            {
-              ...rotated,
-              x: snap(selected.x + dx),
-              y: snap(selected.y),
-              z: snap(selected.z + dz),
-            },
-            container
-          );
+          const moved = normalizeManualPlacement({
+            ...rotated,
+            x: selected.x + dx,
+            y: selected.y,
+            z: selected.z + dz,
+          });
           if (!collidesWithOthers(moved, others)) return moved;
 
           const movedStacked = clampCubeInsideContainer(
@@ -696,7 +852,7 @@ export default function LoadVisualizer3D({
 
       return null;
     },
-    [collidesWithOthers, container]
+    [collidesWithOthers, container, normalizeManualPlacement]
   );
 
   // Rotate only the selected cube. Never re-pack all cargo.
@@ -716,17 +872,40 @@ export default function LoadVisualizer3D({
 
       const next = prev.map((c) => (c.id === selectedId ? rotated : c));
       setLayoutNotice(null);
-      onCubesChange?.(next);
+      shouldEmitChangesRef.current = true;
       return next;
     });
   };
 
-  const updateCube = (nextCube: Cube3DData) => {
-    const safe = clampCubeInsideContainer(nextCube, container);
+  const updateCube = (nextCube: Cube3DData, mode: CubeUpdateMode = "commit") => {
+    const safe = normalizeManualPlacement(nextCube);
+
     setItems((prev) => {
-      const next = prev.map((c) => (c.id === safe.id ? safe : c));
+      const moving = prev.find((c) => c.id === safe.id);
+      if (!moving) return prev;
+
+      if (mode === "preview") {
+        const next = prev.map((c) => (c.id === safe.id ? safe : c));
+        setLayoutNotice(null);
+        return next;
+      }
+
+      const others = prev.filter((c) => c.id !== safe.id);
+
+      const resolved = reflowAfterMove(moving, safe, others);
+      if (!resolved) {
+        setLayoutNotice("No hay espacio válido para ese movimiento sin salir del trailer ni colisionar.");
+        return prev;
+      }
+
+      const othersMap = new Map(resolved.others.map((c) => [c.id, c]));
+      const next = prev.map((c) => {
+        if (c.id === resolved.moving.id) return resolved.moving;
+        return othersMap.get(c.id) ?? c;
+      });
+
       setLayoutNotice(null);
-      onCubesChange?.(next);
+      shouldEmitChangesRef.current = true;
       return next;
     });
   };
@@ -738,7 +917,9 @@ export default function LoadVisualizer3D({
           shadows
           camera={cam}
           style={{ background: "#F3F4F6" }}
-          onPointerMissed={() => setSelectedId(null)}
+          onPointerMissed={() => {
+            if (!editMode) setSelectedId(null);
+          }}
         >
           <ambientLight intensity={0.7} />
           <directionalLight
@@ -770,13 +951,13 @@ export default function LoadVisualizer3D({
               key={cube.id}
               cube={cube}
               container={container}
-              allCubes={items}
               editable={editMode}
               onUpdate={updateCube}
               onTransformingChange={setIsTransforming}
               isSelected={selectedId === cube.id}
               onClick={(c) => {
                 setSelectedId(c.id);
+                if (editMode) setLayoutNotice(null);
                 onCubeClick?.(c);
               }}
             />
@@ -808,7 +989,18 @@ export default function LoadVisualizer3D({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setEditMode((v) => !v)}
+              onClick={() =>
+                setEditMode((v) => {
+                  const next = !v;
+                  if (next) {
+                    setSelectedId(null);
+                    setLayoutNotice("Selecciona una caja para editarla con el gizmo.");
+                  } else {
+                    setLayoutNotice(null);
+                  }
+                  return next;
+                })
+              }
               className={`rounded-md border px-3 py-2 text-sm hover:bg-gray-50 ${editMode ? "bg-gray-50" : ""}`}
             >
               {editMode ? "Modo edición: ON" : "Modo edición: OFF"}
@@ -822,6 +1014,15 @@ export default function LoadVisualizer3D({
               title="Rotar 90° (Y)"
             >
               Rotar 90°
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedId(null)}
+              disabled={!selectedId}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              Deseleccionar
             </button>
 
             <button
