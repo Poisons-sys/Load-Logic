@@ -1,5 +1,4 @@
 import { withAuth } from 'next-auth/middleware'
-import { NextRequest } from 'next/server'
 
 // Rutas públicas que no requieren autenticación
 export const config = {
@@ -10,7 +9,7 @@ export const config = {
 
 // Proxy que protege todas las rutas excepto /login
 export default withAuth(
-  function proxy(_req: NextRequest) {
+  function proxy() {
     return undefined
   },
   {

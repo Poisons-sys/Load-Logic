@@ -8,11 +8,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "test:regression": "node --import tsx --test src/**/*.test.ts",
+    "test:smoke:load-plan": "tsx ./src/scripts/smoke-load-plan-flow.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx ./src/db/seed.ts"
+    "db:seed": "tsx ./src/db/seed.ts",
+    "db:backfill:placements": "tsx ./src/db/backfill-load-plan-placements.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "4.1.3",

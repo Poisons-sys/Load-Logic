@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { loadPlans, loadPlanItems, products, vehicles } from '@/db/schema'
 import { eq, and, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
+import { createLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
 
 // GET - Listar todos los planes de carga
 export async function GET(request: NextRequest) {
@@ -82,15 +83,15 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request)
 
-    const body = await request.json()
-    const { name, description, vehicleId, items } = body
-
-    if (!name || !vehicleId || !items || !Array.isArray(items) || items.length === 0) {
+    const rawBody = await request.json().catch(() => null)
+    const parsedBody = createLoadPlanSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
       return NextResponse.json(
-        { error: 'Nombre, vehiculo y items son requeridos' },
+        { error: zodErrorMessage(parsedBody.error) },
         { status: 400 }
       )
     }
+    const { name, description, vehicleId, items } = parsedBody.data
 
     const vehicle = await db.query.vehicles.findFirst({
       where: and(
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const productIds = items.map((item: any) => item.productId)
+    const productIds = items.map((item) => item.productId)
     const existingProducts = await db.query.products.findMany({
       where: and(
         eq(products.companyId, auth.companyId),
@@ -170,13 +171,13 @@ export async function POST(request: NextRequest) {
         })
         .returning()
 
-      for (const item of items) {
-        await tx.insert(loadPlanItems).values({
+      await tx.insert(loadPlanItems).values(
+        items.map((item) => ({
           loadPlanId: created.id,
           productId: item.productId,
           quantity: item.quantity,
-        })
-      }
+        }))
+      )
 
       return created
     })

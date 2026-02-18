@@ -4,6 +4,10 @@ import { db } from '@/db'
 import { products, vehicles } from '@/db/schema'
 import { requireAuth } from '@/lib/auth-server'
 import { optimizeLoad } from '@/lib/optimization'
+import {
+  previewOptimizeSchema,
+  zodErrorMessage,
+} from '@/lib/validation/load-plans'
 
 type NullsToUndefined<T> = {
   [K in keyof T]:
@@ -12,18 +16,13 @@ type NullsToUndefined<T> = {
     T[K]
 }
 
-function nullsToUndefined<T extends Record<string, any>>(obj: T): NullsToUndefined<T> {
+function nullsToUndefined<T extends Record<string, unknown>>(obj: T): NullsToUndefined<T> {
   return Object.fromEntries(
     Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
   ) as NullsToUndefined<T>
 }
 
-function toBool(v: any, def = false) {
-  if (v === null || v === undefined) return def
-  return Boolean(v)
-}
-
-function toNum(v: any, def = 0) {
+function toNum(v: unknown, def = 0) {
   const n = Number(v)
   return Number.isFinite(n) ? n : def
 }
@@ -31,19 +30,21 @@ function toNum(v: any, def = 0) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request)
-    const body = await request.json()
-    const { vehicleId, items } = body ?? {}
+    const rawBody = await request.json().catch(() => null)
+    const parsedBody = previewOptimizeSchema.safeParse(rawBody)
 
-    if (!vehicleId || !Array.isArray(items) || items.length === 0) {
+    if (!parsedBody.success) {
       return NextResponse.json(
-        { error: 'Vehiculo e items son requeridos' },
+        { error: zodErrorMessage(parsedBody.error) },
         { status: 400 }
       )
     }
 
+    const { vehicleId, items } = parsedBody.data
+
     const vehicle = await db.query.vehicles.findFirst({
       where: and(
-        eq(vehicles.id, String(vehicleId)),
+        eq(vehicles.id, vehicleId),
         eq(vehicles.companyId, auth.companyId)
       ),
     })
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
     }
 
     const requestProductIds = items
-      .map((it: any) => String(it?.productId ?? ''))
+      .map((item) => item.productId)
       .filter(Boolean)
 
     const existingProducts = await db.query.products.findMany({
@@ -66,8 +67,8 @@ export async function POST(request: NextRequest) {
       ),
     })
 
-    const validIds = new Set(existingProducts.map(p => p.id))
-    const invalidIds = requestProductIds.filter((id: string) => !validIds.has(id))
+    const productsById = new Map(existingProducts.map((p) => [p.id, p] as const))
+    const invalidIds = requestProductIds.filter((id) => !productsById.has(id))
     if (invalidIds.length > 0) {
       return NextResponse.json(
         { error: `Productos no validos: ${invalidIds.join(', ')}` },
@@ -80,23 +81,21 @@ export async function POST(request: NextRequest) {
     type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
 
     const productsForOptimization: ProductsForOptimization = items
-      .map((it: any) => {
-        const productId = String(it?.productId ?? '')
-        const quantity = Number(it?.quantity ?? 0)
-        const p = existingProducts.find(x => x.id === productId)
-        if (!p || quantity <= 0) return null
+      .map((item) => {
+        const product = productsById.get(item.productId)
+        if (!product) return null
 
-        const normalized = nullsToUndefined(p)
+        const normalized = nullsToUndefined(product)
         const normalizedProduct: AlgoProduct = {
-          ...(normalized as any),
-          hsCode: (normalized as any).hsCode ?? undefined,
-          description: (normalized as any).description ?? '',
-          subcategory: (normalized as any).subcategory ?? 'Sin subcategoria',
+          ...(normalized as unknown as AlgoProduct),
+          hsCode: normalized.hsCode ?? undefined,
+          description: normalized.description ?? '',
+          subcategory: normalized.subcategory ?? 'Sin subcategoria',
         }
 
-        return { product: normalizedProduct, quantity }
+        return { product: normalizedProduct, quantity: item.quantity }
       })
-      .filter(Boolean) as ProductsForOptimization
+      .filter((x): x is ProductsForOptimization[number] => Boolean(x))
 
     if (productsForOptimization.length === 0) {
       return NextResponse.json(
@@ -105,19 +104,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const normalizedVehicle = nullsToUndefined(vehicle)
     const vehicleForOptimization: AlgoVehicle = {
-      ...(vehicle as any),
-      hasRefrigeration: toBool((vehicle as any).hasRefrigeration, false),
-      hasLiftgate: toBool((vehicle as any).hasLiftgate, false),
-      hasSideDoor: toBool((vehicle as any).hasSideDoor, false),
-      hasRearDoor: toBool((vehicle as any).hasRearDoor, true),
-      hasTemperatureControl: toBool((vehicle as any).hasTemperatureControl, false),
-      isHazmatAllowed: toBool((vehicle as any).isHazmatAllowed, false),
-      hazardousMaterialAuthorized: toBool((vehicle as any).hazardousMaterialAuthorized, false),
-      internalLength: toNum((vehicle as any).internalLength, (vehicle as any).internalLength ?? 0),
-      internalWidth: toNum((vehicle as any).internalWidth, (vehicle as any).internalWidth ?? 0),
-      internalHeight: toNum((vehicle as any).internalHeight, (vehicle as any).internalHeight ?? 0),
-      maxWeight: toNum((vehicle as any).maxWeight, (vehicle as any).maxWeight ?? 0),
+      ...(normalizedVehicle as AlgoVehicle),
+      internalLength: toNum(normalizedVehicle.internalLength, 0),
+      internalWidth: toNum(normalizedVehicle.internalWidth, 0),
+      internalHeight: toNum(normalizedVehicle.internalHeight, 0),
+      maxWeight: toNum(normalizedVehicle.maxWeight, 0),
     }
 
     const optimization = await optimizeLoad(productsForOptimization, vehicleForOptimization)

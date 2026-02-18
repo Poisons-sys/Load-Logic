@@ -475,8 +475,7 @@ function getCategoryColor(category: string): string {
 }
 
 export function validateLoadConstraints(
-  placedItems: Array<{ product: Product; position: { y: number } }>,
-  vehicle: Vehicle
+  placedItems: Array<{ product: Product; position: { y: number } }>
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = []
 

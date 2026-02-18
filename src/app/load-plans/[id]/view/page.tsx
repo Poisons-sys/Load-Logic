@@ -35,6 +35,29 @@ type PlanInstruction = {
   position?: any
 }
 
+type PlanPlacement = {
+  id: string
+  itemId?: string | null
+  productId?: string | null
+  pieceIndex?: number | null
+  positionX?: number | null
+  positionY?: number | null
+  positionZ?: number | null
+  rotationX?: number | null
+  rotationY?: number | null
+  rotationZ?: number | null
+  loadingOrder?: number | null
+  product: {
+    id: string
+    name: string
+    category?: string | null
+    weight?: number | null
+    width?: number | null
+    height?: number | null
+    length?: number | null
+  } | null
+}
+
 type LoadPlan = {
   id: string
   name: string
@@ -52,6 +75,7 @@ type LoadPlan = {
     unitNumber?: string | null
   } | null
   items: PlanItem[]
+  placements?: PlanPlacement[]
   instructions?: PlanInstruction[]
 }
 
@@ -103,6 +127,40 @@ export default function LoadPlan3DViewPage() {
   }, [plan])
 
   const cubes = useMemo(() => {
+    const fromPlacements = (plan?.placements ?? [])
+      .slice()
+      .sort((a, b) => Number(a.loadingOrder ?? 0) - Number(b.loadingOrder ?? 0))
+      .map((placement) => {
+        const product = placement.product
+        if (!product) return null
+
+        const algoX = Number(placement.positionX ?? 0)
+        const algoY = Number(placement.positionY ?? 0)
+        const algoZ = Number(placement.positionZ ?? 0)
+        const rotDeg = Number(placement.rotationY ?? 0)
+        const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
+
+        return {
+          id: `pl-${placement.id}`,
+          x: algoZ,
+          y: algoY,
+          z: algoX,
+          width: Number(product.width ?? 0),
+          height: Number(product.height ?? 0),
+          depth: Number(product.length ?? 0),
+          rotY,
+          color: getCategoryColor(String(product.category ?? 'generales')),
+          name: String(product.name ?? 'Producto'),
+          weightKg: Number(product.weight ?? 0),
+          product,
+        }
+      })
+      .filter(Boolean) as any[]
+
+    if (fromPlacements.length > 0) {
+      return fromPlacements
+    }
+
     const fromInstructions = (plan?.instructions ?? [])
       .map((ins, idx) => {
         const pos = ins?.position as any

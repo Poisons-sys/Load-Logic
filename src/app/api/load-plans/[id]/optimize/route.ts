@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { loadPlans, loadPlanItems, loadingInstructions } from '@/db/schema'
+import { loadPlans, loadPlanItems, loadPlanPlacements, loadingInstructions } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
 import { optimizeLoad } from '@/lib/optimization'
 import { requireAuth } from '@/lib/auth-server'
+import {
+  persistOptimizeSchema,
+  type ManualCubeInput,
+  zodErrorMessage,
+} from '@/lib/validation/load-plans'
 
 type NullsToUndefined<T> = {
   [K in keyof T]:
@@ -12,29 +17,18 @@ type NullsToUndefined<T> = {
     T[K]
 }
 
-type ManualCubeInput = {
-  x?: number
-  y?: number
-  z?: number
-  width?: number
-  height?: number
-  depth?: number
-  rotY?: number
-  productId?: string
-}
+type OptimizationOutput = Awaited<ReturnType<typeof optimizeLoad>>
+type ProductsForOptimization = Parameters<typeof optimizeLoad>[0]
+type AlgoProduct = ProductsForOptimization[number]['product']
+type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
 
-function nullsToUndefined<T extends Record<string, any>>(obj: T): NullsToUndefined<T> {
+function nullsToUndefined<T extends Record<string, unknown>>(obj: T): NullsToUndefined<T> {
   return Object.fromEntries(
     Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
   ) as NullsToUndefined<T>
 }
 
-function toBool(v: any, def = false) {
-  if (v === null || v === undefined) return def
-  return Boolean(v)
-}
-
-function toNum(v: any, def = 0) {
+function toNum(v: unknown, def = 0) {
   const n = Number(v)
   return Number.isFinite(n) ? n : def
 }
@@ -50,7 +44,7 @@ function buildOptimizationFromManualCubes(
   loadPlan: {
     items: Array<{
       productId: string | null
-      product: any
+      product: Record<string, unknown> | null
     }>
   },
   vehicle: {
@@ -58,18 +52,24 @@ function buildOptimizationFromManualCubes(
     internalHeight: number | null
     internalLength: number | null
   }
-) {
-  const loadItemsByProductId = new Map(
-    loadPlan.items
-      .filter(item => item.productId && item.product)
-      .map(item => [String(item.productId), item] as const)
-  )
+): OptimizationOutput {
+  const loadItemsByProductId = new Map<string, AlgoProduct>()
+  for (const item of loadPlan.items) {
+    if (!item.productId || !item.product) continue
+    const normalized = nullsToUndefined(item.product)
+    const normalizedProduct: AlgoProduct = {
+      ...(normalized as unknown as AlgoProduct),
+      hsCode: normalized.hsCode as string | undefined,
+      description: String(normalized.description ?? ''),
+      subcategory: String(normalized.subcategory ?? 'Sin subcategoria'),
+    }
+    loadItemsByProductId.set(String(item.productId), normalizedProduct)
+  }
 
-  const placedItems = manualCubes
+  const placedItems: OptimizationOutput['placedItems'] = manualCubes
     .map((cube) => {
-      const productId = String(cube.productId ?? '')
-      const loadItem = loadItemsByProductId.get(productId)
-      if (!loadItem?.product) return null
+      const product = loadItemsByProductId.get(cube.productId)
+      if (!product) return null
 
       // Visualizador: x=avance, y=alto, z=lateral
       // Algoritmo/API: x=lateral, y=alto, z=avance
@@ -79,18 +79,13 @@ function buildOptimizationFromManualCubes(
       const rotYDeg = safeRoundDeg(toNum(cube.rotY, 0))
 
       return {
-        product: loadItem.product,
+        product,
         quantity: 1,
         position: { x: algoX, y: algoY, z: algoZ },
         rotation: { x: 0, y: rotYDeg, z: 0 },
       }
     })
-    .filter(Boolean) as Array<{
-    product: any
-    quantity: number
-    position: { x: number; y: number; z: number }
-    rotation: { x: number; y: number; z: number }
-  }>
+    .filter((item): item is OptimizationOutput['placedItems'][number] => Boolean(item))
 
   if (placedItems.length === 0) {
     throw new Error('No se recibieron cubos manuales validos para guardar')
@@ -130,7 +125,7 @@ function buildOptimizationFromManualCubes(
     rear: totalWeight > 0 ? (rearWeight / totalWeight) * 100 : 0,
   }
 
-  const instructions = placedItems
+  const instructions: OptimizationOutput['instructions'] = placedItems
     .slice()
     .sort((a, b) => {
       if (a.position.y !== b.position.y) return a.position.y - b.position.y
@@ -162,14 +157,16 @@ export async function POST(
   try {
     const auth = await requireAuth(request)
 
-    let body: any = {}
-    try {
-      body = await request.json()
-    } catch {
-      body = {}
+    const rawBody = await request.json().catch(() => ({}))
+    const parsedBody = persistOptimizeSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { error: zodErrorMessage(parsedBody.error) },
+        { status: 400 }
+      )
     }
 
-    const manualCubes = Array.isArray(body?.manualCubes) ? body.manualCubes as ManualCubeInput[] : []
+    const manualCubes = parsedBody.data.manualCubes
 
     const loadPlan = await db.query.loadPlans.findFirst({
       where: and(
@@ -193,43 +190,31 @@ export async function POST(
       )
     }
 
-    type ProductsForOptimization = Parameters<typeof optimizeLoad>[0]
-    type AlgoProduct = ProductsForOptimization[number]['product']
-    type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
+    const productsForOptimization: ProductsForOptimization = []
+    for (const item of loadPlan.items) {
+      if (!item.product) continue
 
-    const productsForOptimization: ProductsForOptimization = loadPlan.items
-      .filter((item) => item.product !== null)
-      .map((item) => {
-        const p = item.product!
-        const normalized = nullsToUndefined(p)
+      const normalized = nullsToUndefined(item.product)
+      const normalizedProduct: AlgoProduct = {
+        ...(normalized as unknown as AlgoProduct),
+        hsCode: normalized.hsCode ?? undefined,
+        description: normalized.description ?? '',
+        subcategory: normalized.subcategory ?? 'Sin subcategoria',
+      }
 
-        const normalizedProduct: AlgoProduct = {
-          ...(normalized as any),
-          hsCode: (normalized as any).hsCode ?? undefined,
-          description: (normalized as any).description ?? '',
-          subcategory: (normalized as any).subcategory ?? 'Sin subcategoria',
-        }
-
-        return {
-          product: normalizedProduct,
-          quantity: Number(item.quantity ?? 0),
-        }
+      productsForOptimization.push({
+        product: normalizedProduct,
+        quantity: Number(item.quantity ?? 0),
       })
+    }
 
-    const v = loadPlan.vehicle
+    const normalizedVehicle = nullsToUndefined(loadPlan.vehicle)
     const vehicleForOptimization: AlgoVehicle = {
-      ...(v as any),
-      hasRefrigeration: toBool((v as any).hasRefrigeration, false),
-      hasLiftgate: toBool((v as any).hasLiftgate, false),
-      hasSideDoor: toBool((v as any).hasSideDoor, false),
-      hasRearDoor: toBool((v as any).hasRearDoor, true),
-      hasTemperatureControl: toBool((v as any).hasTemperatureControl, false),
-      isHazmatAllowed: toBool((v as any).isHazmatAllowed, false),
-      hazardousMaterialAuthorized: toBool((v as any).hazardousMaterialAuthorized, false),
-      internalLength: toNum((v as any).internalLength, (v as any).internalLength ?? 0),
-      internalWidth: toNum((v as any).internalWidth, (v as any).internalWidth ?? 0),
-      internalHeight: toNum((v as any).internalHeight, (v as any).internalHeight ?? 0),
-      maxWeight: toNum((v as any).maxWeight, (v as any).maxWeight ?? 0),
+      ...(normalizedVehicle as AlgoVehicle),
+      internalLength: toNum(normalizedVehicle.internalLength, 0),
+      internalWidth: toNum(normalizedVehicle.internalWidth, 0),
+      internalHeight: toNum(normalizedVehicle.internalHeight, 0),
+      maxWeight: toNum(normalizedVehicle.maxWeight, 0),
     }
 
     const optimizationResult = manualCubes.length > 0
@@ -237,21 +222,28 @@ export async function POST(
       : await optimizeLoad(productsForOptimization, vehicleForOptimization)
 
     await db.transaction(async (tx) => {
+      await tx.delete(loadPlanPlacements)
+        .where(eq(loadPlanPlacements.loadPlanId, id))
+
       await tx.delete(loadingInstructions)
         .where(eq(loadingInstructions.loadPlanId, id))
 
-      const itemByProductId = new Map(
-        loadPlan.items.map(item => [item.productId, item] as const)
-      )
+      const itemByProductId = new Map<string, (typeof loadPlan.items)[number]>()
+      for (const item of loadPlan.items) {
+        if (!item.productId) continue
+        itemByProductId.set(String(item.productId), item)
+      }
       const firstPlacementByItemId = new Map<string, {
         position: { x: number; y: number; z: number }
         rotation: { x: number; y: number; z: number }
         loadingOrder: number
       }>()
+      const pieceIndexByProductId = new Map<string, number>()
 
       for (let i = 0; i < optimizationResult.placedItems.length; i++) {
         const placedItem = optimizationResult.placedItems[i]
-        const loadItem = itemByProductId.get(placedItem.product.id)
+        const productId = String(placedItem.product.id)
+        const loadItem = itemByProductId.get(productId)
 
         if (loadItem?.id && !firstPlacementByItemId.has(loadItem.id)) {
           firstPlacementByItemId.set(loadItem.id, {
@@ -260,6 +252,24 @@ export async function POST(
             loadingOrder: i + 1,
           })
         }
+
+        const pieceIndex = (pieceIndexByProductId.get(productId) ?? 0) + 1
+        pieceIndexByProductId.set(productId, pieceIndex)
+
+        await tx.insert(loadPlanPlacements)
+          .values({
+            loadPlanId: id,
+            itemId: loadItem?.id ?? null,
+            productId,
+            pieceIndex,
+            positionX: placedItem.position.x,
+            positionY: placedItem.position.y,
+            positionZ: placedItem.position.z,
+            rotationX: placedItem.rotation.x ?? 0,
+            rotationY: placedItem.rotation.y ?? 0,
+            rotationZ: placedItem.rotation.z ?? 0,
+            loadingOrder: i + 1,
+          })
 
         const positionPayload = {
           x: placedItem.position.x,
@@ -319,6 +329,12 @@ export async function POST(
       with: {
         vehicle: true,
         items: { with: { product: true } },
+        placements: {
+          orderBy: (placements, { asc }) => [asc(placements.loadingOrder)],
+          with: {
+            product: true,
+          },
+        },
         instructions: {
           orderBy: (instructions, { asc }) => [asc(instructions.step)],
         },

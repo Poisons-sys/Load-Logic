@@ -1,5 +1,5 @@
-import { neon } from '@neondatabase/serverless'
-import { drizzle } from 'drizzle-orm/neon-http'
+import { Pool } from '@neondatabase/serverless'
+import { drizzle } from 'drizzle-orm/neon-serverless'
 import 'dotenv/config'
 import * as schema from './schema'
 
@@ -18,5 +18,18 @@ if (!DATABASE_URL) {
   )
 }
 
-const sql = neon(DATABASE_URL)
-export const db = drizzle(sql, { schema })
+const globalDb = globalThis as unknown as {
+  __loadLogicPool?: Pool
+}
+
+const pool =
+  globalDb.__loadLogicPool ??
+  new Pool({
+    connectionString: DATABASE_URL,
+  })
+
+if (process.env.NODE_ENV !== 'production') {
+  globalDb.__loadLogicPool = pool
+}
+
+export const db = drizzle(pool, { schema })

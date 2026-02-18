@@ -8,8 +8,7 @@ import {
   integer, 
   real, 
   jsonb,
-  pgEnum,
-  primaryKey
+  pgEnum
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
@@ -231,6 +230,28 @@ export const loadPlanItems = pgTable('load_plan_items', {
 })
 
 // ============================================
+// TABLA: POSICIONES POR PIEZA (FUENTE DE VERDAD 3D)
+// ============================================
+export const loadPlanPlacements = pgTable('load_plan_placements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  loadPlanId: uuid('load_plan_id').notNull().references(() => loadPlans.id, { onDelete: 'cascade' }),
+  itemId: uuid('item_id').references(() => loadPlanItems.id, { onDelete: 'set null' }),
+  productId: uuid('product_id').notNull().references(() => products.id),
+  pieceIndex: integer('piece_index').notNull().default(0),
+
+  positionX: real('position_x').notNull(),
+  positionY: real('position_y').notNull(),
+  positionZ: real('position_z').notNull(),
+
+  rotationX: real('rotation_x').default(0),
+  rotationY: real('rotation_y').default(0),
+  rotationZ: real('rotation_z').default(0),
+
+  loadingOrder: integer('loading_order').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+})
+
+// ============================================
 // TABLA: INSTRUCCIONES DE CARGA
 // ============================================
 export const loadingInstructions = pgTable('loading_instructions', {
@@ -308,6 +329,7 @@ export const productsRelations = relations(products, ({ one, many }) => ({
     references: [companies.id],
   }),
   loadPlanItems: many(loadPlanItems),
+  placements: many(loadPlanPlacements),
 }))
 
 export const vehiclesRelations = relations(vehicles, ({ one, many }) => ({
@@ -332,17 +354,34 @@ export const loadPlansRelations = relations(loadPlans, ({ one, many }) => ({
     references: [users.id],
   }),
   items: many(loadPlanItems),
+  placements: many(loadPlanPlacements),
   instructions: many(loadingInstructions),
   reports: many(reports),
 }))
 
-export const loadPlanItemsRelations = relations(loadPlanItems, ({ one }) => ({
+export const loadPlanItemsRelations = relations(loadPlanItems, ({ one, many }) => ({
   loadPlan: one(loadPlans, {
     fields: [loadPlanItems.loadPlanId],
     references: [loadPlans.id],
   }),
   product: one(products, {
     fields: [loadPlanItems.productId],
+    references: [products.id],
+  }),
+  placements: many(loadPlanPlacements),
+}))
+
+export const loadPlanPlacementsRelations = relations(loadPlanPlacements, ({ one }) => ({
+  loadPlan: one(loadPlans, {
+    fields: [loadPlanPlacements.loadPlanId],
+    references: [loadPlans.id],
+  }),
+  item: one(loadPlanItems, {
+    fields: [loadPlanPlacements.itemId],
+    references: [loadPlanItems.id],
+  }),
+  product: one(products, {
+    fields: [loadPlanPlacements.productId],
     references: [products.id],
   }),
 }))

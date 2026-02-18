@@ -9,7 +9,9 @@ export type AuthContext = {
   isActive: boolean
 }
 
-export async function requireAuth(_request?: NextRequest): Promise<AuthContext> {
+export async function requireAuth(request?: NextRequest): Promise<AuthContext> {
+  // keep optional request argument for route handlers that pass req
+  void request
   const session = await getServerSession(authOptions)
 
   if (!session?.user?.id) throw new Error('UNAUTHORIZED')

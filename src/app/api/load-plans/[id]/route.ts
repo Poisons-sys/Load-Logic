@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { and, eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { loadPlans, loadPlanItems, vehicles, products } from '@/db/schema'
-import { eq, and } from 'drizzle-orm'
+import {
+  loadPlanItems,
+  loadPlanPlacements,
+  loadPlans,
+  loadingInstructions,
+  products,
+  vehicles,
+} from '@/db/schema'
 import { requireAuth } from '@/lib/auth-server'
+import { updateLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
 
 // GET - Obtener plan de carga por ID
 export async function GET(
@@ -21,6 +29,12 @@ export async function GET(
           columns: { id: true, name: true, email: true },
         },
         items: { with: { product: true } },
+        placements: {
+          orderBy: (placements, { asc }) => [asc(placements.loadingOrder)],
+          with: {
+            product: true,
+          },
+        },
         instructions: {
           orderBy: (instructions, { asc }) => [asc(instructions.step)],
         },
@@ -58,19 +72,28 @@ export async function PUT(
       return NextResponse.json({ error: 'Plan de carga no encontrado' }, { status: 404 })
     }
 
-    const body = await request.json()
-    const { name, description, status, items } = body
+    const rawBody = await request.json().catch(() => null)
+    const parsedBody = updateLoadPlanSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json(
+        { error: zodErrorMessage(parsedBody.error) },
+        { status: 400 }
+      )
+    }
 
-    // Si se proporcionan nuevos items, recalcular totales
+    const { name, description, status, items } = parsedBody.data
+
     let totalWeight = existingLoadPlan.totalWeight
     let totalVolume = existingLoadPlan.totalVolume
     let spaceUtilization = existingLoadPlan.spaceUtilization
+    const nextName = name || existingLoadPlan.name
+    const nextDescription = description !== undefined ? description : existingLoadPlan.description
+    const nextStatus = status || existingLoadPlan.status
 
     if (items && Array.isArray(items) && items.length > 0) {
-      // ✅ FIX: vehicleId puede ser null, y Drizzle no permite eq(column, null)
       if (!existingLoadPlan.vehicleId) {
         return NextResponse.json(
-          { error: 'Plan de carga sin vehículo asignado' },
+          { error: 'Plan de carga sin vehiculo asignado' },
           { status: 400 }
         )
       }
@@ -80,58 +103,84 @@ export async function PUT(
       })
 
       if (!vehicle) {
-        return NextResponse.json({ error: 'Vehículo no encontrado' }, { status: 404 })
+        return NextResponse.json({ error: 'Vehiculo no encontrado' }, { status: 404 })
       }
 
-      // Eliminar items existentes
-      await db.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
+      const allProducts = await db.query.products.findMany({
+        where: eq(products.companyId, auth.companyId),
+      })
+      const productsById = new Map(allProducts.map((p) => [p.id, p] as const))
 
-      // Crear nuevos items
       totalWeight = 0
       totalVolume = 0
+      const nextItemsRows: Array<{ loadPlanId: string; productId: string; quantity: number }> = []
 
       for (const item of items) {
-        const product = await db.query.products.findFirst({
-          where: and(eq(products.id, item.productId), eq(products.companyId, auth.companyId)),
+        const product = productsById.get(item.productId)
+        if (!product) continue
+
+        totalWeight += product.weight * item.quantity
+        totalVolume += product.volume * item.quantity
+        nextItemsRows.push({
+          loadPlanId: id,
+          productId: item.productId,
+          quantity: item.quantity,
         })
-
-        if (product) {
-          totalWeight += product.weight * item.quantity
-          totalVolume += product.volume * item.quantity
-
-          await db.insert(loadPlanItems).values({
-            loadPlanId: id,
-            productId: item.productId,
-            quantity: item.quantity,
-          })
-        }
       }
 
-      // ✅ Evitar NaN / Infinity si maxVolume llegara 0/null (por schema debería ser number)
-      const maxVol = Number((vehicle as any).maxVolume ?? 0)
+      const maxVol = Number(vehicle.maxVolume ?? 0)
       spaceUtilization = maxVol > 0 ? (totalVolume / maxVol) * 100 : 0
+
+      await db.transaction(async (tx) => {
+        await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
+        await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
+        await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
+        if (nextItemsRows.length > 0) {
+          await tx.insert(loadPlanItems).values(nextItemsRows)
+        }
+
+        await tx
+          .update(loadPlans)
+          .set({
+            name: nextName,
+            description: nextDescription,
+            status: nextStatus,
+            totalWeight,
+            totalVolume,
+            spaceUtilization,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
+      })
+    } else {
+      await db
+        .update(loadPlans)
+        .set({
+          name: nextName,
+          description: nextDescription,
+          status: nextStatus,
+          totalWeight,
+          totalVolume,
+          spaceUtilization,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
     }
 
-    await db
-      .update(loadPlans)
-      .set({
-        name: name || existingLoadPlan.name,
-        description: description !== undefined ? description : existingLoadPlan.description,
-        status: status || existingLoadPlan.status,
-        totalWeight,
-        totalVolume,
-        spaceUtilization,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
-      .returning()
-
-    // Obtener el plan completo actualizado
     const completeLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
       with: {
         vehicle: true,
         items: { with: { product: true } },
+        placements: {
+          orderBy: (placements, { asc }) => [asc(placements.loadingOrder)],
+          with: {
+            product: true,
+          },
+        },
+        instructions: {
+          orderBy: (instructions, { asc }) => [asc(instructions.step)],
+        },
         createdByUser: {
           columns: { id: true, name: true, email: true },
         },
@@ -161,7 +210,6 @@ export async function DELETE(
   try {
     const auth = await requireAuth(request)
 
-    // Solo admin o el creador puede eliminar
     const existingLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
     })
@@ -177,13 +225,14 @@ export async function DELETE(
       )
     }
 
-    // Eliminar items primero (cascade)
-    await db.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
-
-    // Eliminar plan de carga
-    await db
-      .delete(loadPlans)
-      .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
+    await db.transaction(async (tx) => {
+      await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
+      await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
+      await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
+      await tx
+        .delete(loadPlans)
+        .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
+    })
 
     return NextResponse.json({
       success: true,
