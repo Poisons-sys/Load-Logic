@@ -48,6 +48,12 @@ type Product = {
   weight: number
   volume: number
   fragility: string | null
+  stackable?: boolean | null
+  maxStackHeight?: number | null
+  maxTopLoadKg?: number | null
+  allowRotate90?: boolean | null
+  noStackAbove?: boolean | null
+  floorOnly?: boolean | null
   temperatureReq: string | null
   temperatureMin: number | null
   temperatureMax: number | null
@@ -102,6 +108,12 @@ const productSchema = z.object({
   height: z.coerce.number().positive('Alto requerido'),
   weight: z.coerce.number().positive('Peso requerido'),
   fragility: z.string().nullable().optional(),
+  stackable: z.boolean().optional().default(true),
+  maxStackHeight: z.coerce.number().int().min(1).max(12).optional().default(1),
+  maxTopLoadKg: z.coerce.number().min(0).optional().default(2500),
+  allowRotate90: z.boolean().optional().default(true),
+  noStackAbove: z.boolean().optional().default(false),
+  floorOnly: z.boolean().optional().default(false),
   temperatureReq: z.string().nullable().optional(),
   temperatureMin: z.coerce.number().nullable().optional(),
   temperatureMax: z.coerce.number().nullable().optional(),
@@ -356,6 +368,12 @@ function ProductDialogForm({
       height: (defaultValues?.height as any) ?? ('' as any),
       weight: (defaultValues?.weight as any) ?? ('' as any),
       fragility: defaultValues?.fragility || 'baja',
+      stackable: defaultValues?.stackable ?? true,
+      maxStackHeight: (defaultValues?.maxStackHeight as any) ?? 1,
+      maxTopLoadKg: (defaultValues?.maxTopLoadKg as any) ?? 2500,
+      allowRotate90: defaultValues?.allowRotate90 ?? true,
+      noStackAbove: defaultValues?.noStackAbove ?? false,
+      floorOnly: defaultValues?.floorOnly ?? false,
       temperatureReq: defaultValues?.temperatureReq || 'ambiente',
       temperatureMin: defaultValues?.temperatureMin ?? null,
       temperatureMax: defaultValues?.temperatureMax ?? null,
@@ -379,6 +397,12 @@ function ProductDialogForm({
         description: values.description || null,
         subcategory: values.subcategory || null,
         fragility: values.fragility || null,
+        stackable: Boolean(values.stackable),
+        maxStackHeight: Number(values.maxStackHeight ?? 1),
+        maxTopLoadKg: Number(values.maxTopLoadKg ?? 2500),
+        allowRotate90: Boolean(values.allowRotate90),
+        noStackAbove: Boolean(values.noStackAbove),
+        floorOnly: Boolean(values.floorOnly),
         temperatureReq: values.temperatureReq || null,
         temperatureMin: values.temperatureMin ?? null,
         temperatureMax: values.temperatureMax ?? null,
@@ -491,6 +515,75 @@ function ProductDialogForm({
               <SelectItem value="muy_alta">Muy Alta</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="col-span-2 rounded-lg border p-3">
+          <p className="mb-2 font-medium text-gray-900">Reglas de Estiba</p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="flex items-center justify-between rounded border px-3 py-2 text-sm">
+              <span>Apilable</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                disabled={saving || disabled}
+                checked={Boolean(form.watch('stackable'))}
+                onChange={(e) => form.setValue('stackable', e.target.checked)}
+              />
+            </label>
+            <label className="flex items-center justify-between rounded border px-3 py-2 text-sm">
+              <span>Permitir rotar 90°</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                disabled={saving || disabled}
+                checked={Boolean(form.watch('allowRotate90'))}
+                onChange={(e) => form.setValue('allowRotate90', e.target.checked)}
+              />
+            </label>
+            <label className="flex items-center justify-between rounded border px-3 py-2 text-sm">
+              <span>No apilar encima</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                disabled={saving || disabled}
+                checked={Boolean(form.watch('noStackAbove'))}
+                onChange={(e) => form.setValue('noStackAbove', e.target.checked)}
+              />
+            </label>
+            <label className="flex items-center justify-between rounded border px-3 py-2 text-sm">
+              <span>Solo piso</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                disabled={saving || disabled}
+                checked={Boolean(form.watch('floorOnly'))}
+                onChange={(e) => form.setValue('floorOnly', e.target.checked)}
+              />
+            </label>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="maxStackHeight">Altura máxima de apilado (niveles)</Label>
+              <Input
+                id="maxStackHeight"
+                type="number"
+                min={1}
+                max={12}
+                disabled={saving || disabled}
+                {...form.register('maxStackHeight')}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="maxTopLoadKg">Carga máxima encima (kg)</Label>
+              <Input
+                id="maxTopLoadKg"
+                type="number"
+                min={0}
+                disabled={saving || disabled}
+                {...form.register('maxTopLoadKg')}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="space-y-2">

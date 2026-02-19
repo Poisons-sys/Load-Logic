@@ -4,6 +4,7 @@ import { db } from '@/db'
 import {
   loadPlanItems,
   loadPlanPlacements,
+  loadPlanVersions,
   loadPlans,
   loadingInstructions,
   products,
@@ -37,6 +38,9 @@ export async function GET(
         },
         instructions: {
           orderBy: (instructions, { asc }) => [asc(instructions.step)],
+        },
+        versions: {
+          orderBy: (versions, { desc }) => [desc(versions.version)],
         },
       },
     })
@@ -113,7 +117,7 @@ export async function PUT(
 
       totalWeight = 0
       totalVolume = 0
-      const nextItemsRows: Array<{ loadPlanId: string; productId: string; quantity: number }> = []
+      const nextItemsRows: Array<{ loadPlanId: string; productId: string; quantity: number; routeStop: number }> = []
 
       for (const item of items) {
         const product = productsById.get(item.productId)
@@ -125,6 +129,7 @@ export async function PUT(
           loadPlanId: id,
           productId: item.productId,
           quantity: item.quantity,
+          routeStop: item.routeStop ?? 1,
         })
       }
 
@@ -133,6 +138,7 @@ export async function PUT(
 
       await db.transaction(async (tx) => {
         await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
+        await tx.delete(loadPlanVersions).where(eq(loadPlanVersions.loadPlanId, id))
         await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
         await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
         if (nextItemsRows.length > 0) {
@@ -181,6 +187,9 @@ export async function PUT(
         instructions: {
           orderBy: (instructions, { asc }) => [asc(instructions.step)],
         },
+        versions: {
+          orderBy: (versions, { desc }) => [desc(versions.version)],
+        },
         createdByUser: {
           columns: { id: true, name: true, email: true },
         },
@@ -227,6 +236,7 @@ export async function DELETE(
 
     await db.transaction(async (tx) => {
       await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
+      await tx.delete(loadPlanVersions).where(eq(loadPlanVersions.loadPlanId, id))
       await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
       await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
       await tx

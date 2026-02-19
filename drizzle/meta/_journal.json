@@ -15,6 +15,20 @@
       "when": 1770588000000,
       "tag": "0001_load_plan_placements",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770703200000,
+      "tag": "0002_advanced_cubing_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1770800400000,
+      "tag": "0003_instance_key_placements",
+      "breakpoints": true
     }
   ]
 }

@@ -62,6 +62,10 @@ export interface Product {
   fragility: FragilityLevel
   stackable: boolean
   maxStackHeight: number
+  maxTopLoadKg?: number
+  allowRotate90?: boolean
+  noStackAbove?: boolean
+  floorOnly?: boolean
   
   // Requisitos especiales
   temperatureReq: TemperatureRequirement
@@ -126,6 +130,7 @@ export interface LoadItem {
   productId: string
   product: Product
   quantity: number
+  routeStop?: number
   
   // Posición en la estiba (se calcula)
   position?: {
@@ -174,6 +179,8 @@ export interface LoadingInstruction {
   step: number
   description: string
   itemId: string
+  routeStop?: number
+  loadingZone?: 'front' | 'center' | 'rear'
   position: { x: number; y: number; z: number }
   orientation: 'horizontal' | 'vertical'
 }

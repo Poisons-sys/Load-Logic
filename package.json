@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "test:regression": "node --import tsx --test src/**/*.test.ts",
     "test:smoke:load-plan": "tsx ./src/scripts/smoke-load-plan-flow.ts",
+    "test:smoke:layout-roundtrip": "tsx ./src/scripts/smoke-layout-roundtrip.ts",
+    "db:seed:qa-catalog": "tsx ./src/scripts/seed-realistic-company-catalog.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

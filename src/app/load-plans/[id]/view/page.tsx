@@ -1,16 +1,20 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import { ArrowLeft, FileDown } from 'lucide-react'
+import { ArrowLeft, FileDown, History, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
-const LoadVisualizer3D = dynamic(() => import('@/components/LoadVisualizer3D'), { ssr: false })
+const LoadVisualizer3D = dynamic(() => import('@/components/LoadVisualizer3D'), {
+  ssr: false,
+})
 
 type PlanItem = {
-  id?: string
+  id: string
+  productId?: string | null
   quantity: number
   positionX?: number | null
   positionY?: number | null
@@ -40,6 +44,7 @@ type PlanPlacement = {
   itemId?: string | null
   productId?: string | null
   pieceIndex?: number | null
+  instanceKey?: string | null
   positionX?: number | null
   positionY?: number | null
   positionZ?: number | null
@@ -58,12 +63,23 @@ type PlanPlacement = {
   } | null
 }
 
+type PlanVersion = {
+  id: string
+  version: number
+  source?: string | null
+  createdAt?: string | null
+}
+
 type LoadPlan = {
   id: string
   name: string
   status?: string | null
   totalWeight?: number | null
   spaceUtilization?: number | null
+  optimizationScore?: number | null
+  layoutVersion?: number | null
+  advancedMetrics?: any
+  versions?: PlanVersion[]
   vehicle: {
     id: string
     name: string
@@ -79,42 +95,67 @@ type LoadPlan = {
   instructions?: PlanInstruction[]
 }
 
+function getCategoryColor(category: string): string {
+  const colors: Record<string, string> = {
+    automotriz: '#3B82F6',
+    electronica: '#8B5CF6',
+    maquinaria: '#6366F1',
+    medico: '#EC4899',
+    energia: '#F59E0B',
+    infraestructura: '#6B7280',
+    carnicos: '#EF4444',
+    lacteos: '#10B981',
+    frutas_verduras: '#84CC16',
+    procesados: '#F97316',
+    congelados: '#06B6D4',
+    granos: '#D97706',
+    peligrosas: '#DC2626',
+    generales: '#9CA3AF',
+  }
+  return colors[category] || '#9CA3AF'
+}
+
+function toNum(value: unknown, fallback = 0) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
 export default function LoadPlan3DViewPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
-  const id = params?.id
+  const planId = typeof params?.id === 'string' ? params.id : ''
 
   const [plan, setPlan] = useState<LoadPlan | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null)
+
+  const fetchPlan = useCallback(async () => {
+    if (!planId) return
+    try {
+      setLoading(true)
+      setError(null)
+
+      const res = await fetch(`/api/load-plans/${planId}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error ?? 'No se pudo cargar el plan')
+      }
+      const json = await res.json()
+      setPlan(json?.data ?? null)
+    } catch (e: any) {
+      setError(e?.message ?? 'Error cargando plan')
+    } finally {
+      setLoading(false)
+    }
+  }, [planId])
 
   useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-
-        const res = await fetch(`/api/load-plans/${id}`, { credentials: 'include', cache: 'no-store' })
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err?.error ?? 'No se pudo cargar el plan')
-        }
-        const json = await res.json()
-        if (cancelled) return
-        setPlan(json?.data ?? null)
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? 'Error cargando plan')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    if (id) run()
-    return () => {
-      cancelled = true
-    }
-  }, [id])
+    void fetchPlan()
+  }, [fetchPlan])
 
   const container = useMemo(() => {
     const v = plan?.vehicle
@@ -123,6 +164,41 @@ export default function LoadPlan3DViewPage() {
       width: Number(v.internalWidth ?? 0),
       height: Number(v.internalHeight ?? 0),
       depth: Number(v.internalLength ?? 0),
+    }
+  }, [plan])
+
+  const metrics = useMemo(() => {
+    const adv = (plan?.advancedMetrics ?? {}) as Record<string, unknown>
+    const validations = Array.isArray(adv.validations)
+      ? (adv.validations as Array<{ severity?: string }>)
+      : []
+    const requestedFromItems = (plan?.items ?? []).reduce(
+      (sum, item) => sum + Math.max(0, Number(item.quantity ?? 0)),
+      0
+    )
+    const placedFromPlacements = Number(plan?.placements?.length ?? 0)
+    const requested = Math.max(0, toNum(adv.requestedItemsCount, requestedFromItems))
+    const placed = Math.max(0, toNum(adv.placedItemsCount, placedFromPlacements))
+    const unplaced = Math.max(
+      0,
+      toNum(
+        adv.unplacedItemsCount,
+        Array.isArray(adv.unplacedItems) ? adv.unplacedItems.length : requested - placed
+      )
+    )
+
+    const criticalIssues = validations.filter((v) => v?.severity === 'critical').length
+    const warningIssues = validations.filter((v) => v?.severity === 'warning').length
+    const ai = (adv.ai ?? null) as Record<string, unknown> | null
+
+    return {
+      requested,
+      placed,
+      unplaced,
+      criticalIssues,
+      warningIssues,
+      aiStrategy: ai?.strategy ? String(ai.strategy) : null,
+      aiImproved: Boolean(ai?.improved ?? false),
     }
   }, [plan])
 
@@ -141,7 +217,8 @@ export default function LoadPlan3DViewPage() {
         const rotY = Number.isFinite(rotDeg) ? (rotDeg * Math.PI) / 180 : 0
 
         return {
-          id: `pl-${placement.id}`,
+          id: String(placement.instanceKey ?? `pl-${placement.id}`),
+          instanceId: String(placement.instanceKey ?? `pl-${placement.id}`),
           x: algoZ,
           y: algoY,
           z: algoX,
@@ -167,8 +244,6 @@ export default function LoadPlan3DViewPage() {
         const product = pos?.product
         if (!pos || !product) return null
 
-        // Algorithm: X=lateral, Y=height, Z=advance
-        // Visualizer: X=advance, Y=height, Z=lateral
         const algoX = Number(pos.x ?? 0)
         const algoY = Number(pos.y ?? 0)
         const algoZ = Number(pos.z ?? 0)
@@ -196,7 +271,6 @@ export default function LoadPlan3DViewPage() {
       return fromInstructions
     }
 
-    // Legacy fallback for old plans without per-piece instructions.
     const items = plan?.items ?? []
     const out: any[] = []
 
@@ -244,6 +318,42 @@ export default function LoadPlan3DViewPage() {
     return out
   }, [plan, container])
 
+  const restoreVersion = async (version: PlanVersion) => {
+    if (!planId) return
+
+    const ok = confirm(
+      `Restaurar la version v${version.version}? Esto crea una nueva version con ese layout.`
+    )
+    if (!ok) return
+
+    try {
+      setRestoringVersionId(version.id)
+      const res = await fetch(`/api/load-plans/${planId}/restore-version`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          versionId: version.id,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error ?? 'No se pudo restaurar la version')
+      }
+
+      const json = await res.json()
+      setPlan(json?.data ?? null)
+    } catch (e: any) {
+      console.error(e)
+      alert(e?.message ?? 'Error restaurando version')
+    } finally {
+      setRestoringVersionId(null)
+    }
+  }
+
   const downloadPdf = async () => {
     if (!plan?.id) return
     try {
@@ -265,6 +375,8 @@ export default function LoadPlan3DViewPage() {
       const util = Number(plan.spaceUtilization ?? 0)
       doc.text(`Peso total: ${(totalWeight / 1000).toFixed(2)} ton`, 14, 50)
       doc.text(`Utilizacion: ${util.toFixed(1)}%`, 14, 56)
+      doc.text(`Score: ${Number(plan.optimizationScore ?? 0).toFixed(1)}`, 14, 62)
+      doc.text(`Version layout: v${Number(plan.layoutVersion ?? 1)}`, 14, 68)
 
       const rows = (plan.items ?? []).map((it: any) => {
         const p = it.product ?? {}
@@ -275,11 +387,49 @@ export default function LoadPlan3DViewPage() {
       })
 
       autoTable(doc, {
-        startY: 64,
+        startY: 74,
         head: [['Producto', 'Categoria', 'Cantidad', 'Peso', 'Dimensiones (cm)']],
         body: rows.length ? rows : [['(Sin productos)', '-', '-', '-', '-']],
         styles: { fontSize: 9 },
         headStyles: { fontStyle: 'bold' },
+        margin: { left: 14, right: 14 },
+      })
+
+      const placementRows = (plan.placements ?? []).map((pl) => [
+        String(pl.product?.name ?? 'Producto'),
+        String(pl.pieceIndex ?? '-'),
+        `(${Number(pl.positionX ?? 0).toFixed(0)}, ${Number(pl.positionY ?? 0).toFixed(0)}, ${Number(pl.positionZ ?? 0).toFixed(0)})`,
+        String(Number(pl.rotationY ?? 0).toFixed(0)),
+      ])
+      const yAfterItems = (doc as any).lastAutoTable?.finalY
+        ? Number((doc as any).lastAutoTable.finalY) + 8
+        : 120
+      autoTable(doc, {
+        startY: yAfterItems,
+        head: [['Producto', 'Pieza', 'Posicion', 'RotY']],
+        body: placementRows.length ? placementRows : [['Sin placements', '-', '-', '-']],
+        styles: { fontSize: 8 },
+        margin: { left: 14, right: 14 },
+      })
+
+      const instructionRows = (plan.instructions ?? []).map((ins) => {
+        const pos = (ins.position ?? {}) as any
+        return [
+          String(ins.step),
+          String(pos?.product?.name ?? '-'),
+          String(pos?.routeStop ?? '-'),
+          String(pos?.loadingZone ?? '-'),
+          `(${Number(pos?.x ?? 0).toFixed(0)}, ${Number(pos?.y ?? 0).toFixed(0)}, ${Number(pos?.z ?? 0).toFixed(0)})`,
+        ]
+      })
+      const yAfterPlacements = (doc as any).lastAutoTable?.finalY
+        ? Number((doc as any).lastAutoTable.finalY) + 8
+        : 160
+      autoTable(doc, {
+        startY: yAfterPlacements,
+        head: [['Paso', 'Producto', 'Parada', 'Zona', 'Posicion']],
+        body: instructionRows.length ? instructionRows : [['-', '-', '-', '-', '-']],
+        styles: { fontSize: 8 },
         margin: { left: 14, right: 14 },
       })
 
@@ -322,26 +472,110 @@ export default function LoadPlan3DViewPage() {
           <LoadVisualizer3D container={container} cubes={cubes} />
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Metricas y Riesgo</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Score</p>
+              <p className="font-semibold">{Number(plan.optimizationScore ?? 0).toFixed(1)}</p>
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Version de Layout</p>
+              <p className="font-semibold">v{Number(plan.layoutVersion ?? 1)}</p>
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Piezas</p>
+              <p className="font-semibold">
+                {metrics.placed}/{metrics.requested}
+              </p>
+              {metrics.unplaced > 0 && (
+                <p className="text-xs text-red-600">{metrics.unplaced} sin colocar</p>
+              )}
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">IA</p>
+              <p className="font-semibold">{metrics.aiStrategy ?? 'baseline'}</p>
+              {metrics.aiImproved && <p className="text-xs text-green-700">mejora detectada</p>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm mt-4">
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Issues criticos</p>
+              <p className="font-semibold text-red-700">{metrics.criticalIssues}</p>
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Warnings</p>
+              <p className="font-semibold text-amber-700">{metrics.warningIssues}</p>
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Centro de Gravedad</p>
+              <p className="font-semibold">
+                {plan.advancedMetrics?.centerOfGravity
+                  ? `(${Number(plan.advancedMetrics.centerOfGravity.x ?? 0).toFixed(0)}, ${Number(plan.advancedMetrics.centerOfGravity.y ?? 0).toFixed(0)}, ${Number(plan.advancedMetrics.centerOfGravity.z ?? 0).toFixed(0)})`
+                  : '-'}
+              </p>
+            </div>
+            <div className="p-3 rounded border bg-gray-50">
+              <p className="text-gray-500">Estabilidad</p>
+              <p className="font-semibold">
+                {plan.advancedMetrics?.stability
+                  ? `${Number(plan.advancedMetrics.stability.score ?? 0).toFixed(1)} (${String(plan.advancedMetrics.stability.level ?? '-')})`
+                  : '-'}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-4 w-4" />
+            Historial de Versiones
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2 max-h-72 overflow-y-auto">
+            {(plan.versions ?? []).map((v) => {
+              const isCurrent = Number(v.version) === Number(plan.layoutVersion ?? 1)
+              return (
+                <div
+                  key={v.id}
+                  className="flex items-center justify-between rounded border px-3 py-2 text-sm"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">v{v.version}</span>
+                      <Badge variant="outline">{v.source ?? 'optimize'}</Badge>
+                      {isCurrent && <Badge>actual</Badge>}
+                    </div>
+                    <p className="text-gray-500">
+                      {v.createdAt ? new Date(v.createdAt).toLocaleString() : '-'}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isCurrent || restoringVersionId === v.id}
+                    onClick={() => restoreVersion(v)}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    {restoringVersionId === v.id ? 'Restaurando...' : 'Restaurar'}
+                  </Button>
+                </div>
+              )
+            })}
+            {(plan.versions ?? []).length === 0 && (
+              <p className="text-sm text-gray-500">Sin historial de versiones.</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
-}
-
-function getCategoryColor(category: string): string {
-  const colors: Record<string, string> = {
-    automotriz: '#3B82F6',
-    electronica: '#8B5CF6',
-    maquinaria: '#6366F1',
-    medico: '#EC4899',
-    energia: '#F59E0B',
-    infraestructura: '#6B7280',
-    carnicos: '#EF4444',
-    lacteos: '#10B981',
-    frutas_verduras: '#84CC16',
-    procesados: '#F97316',
-    congelados: '#06B6D4',
-    granos: '#D97706',
-    peligrosas: '#DC2626',
-    generales: '#9CA3AF',
-  }
-  return colors[category] || '#9CA3AF'
 }

@@ -58,8 +58,8 @@ async function parseBody(response: Response): Promise<unknown> {
 
 async function run() {
   const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://localhost:3000'
-  const email = process.env.SMOKE_EMAIL ?? 'admin@loadlogic.com'
-  const password = process.env.SMOKE_PASSWORD ?? 'admin123'
+  const email = process.env.SMOKE_EMAIL ?? 'admin@local.test'
+  const password = process.env.SMOKE_PASSWORD ?? '12345'
 
   const jar = new CookieJar()
   let createdPlanId: string | null = null

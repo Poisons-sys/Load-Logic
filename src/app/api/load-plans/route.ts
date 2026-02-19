@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { loadPlans, loadPlanItems, products, vehicles } from '@/db/schema'
+import { activityLogs, loadPlanItems, loadPlans, products, vehicles } from '@/db/schema'
 import { eq, and, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 import { createLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
@@ -46,6 +46,23 @@ export async function GET(request: NextRequest) {
 
     const normalized = allLoadPlans.map((p) => {
       const createdAt = p.createdAt ? new Date(p.createdAt).toISOString() : ''
+      const metrics = (p.advancedMetrics ?? {}) as any
+      const validations = Array.isArray(metrics.validations) ? metrics.validations : []
+      const criticalIssues = validations.filter((v: any) => v?.severity === 'critical').length
+      const warningIssues = validations.filter((v: any) => v?.severity === 'warning').length
+      const requestedItemsCount = Number(
+        metrics.requestedItemsCount ??
+          (p.items ?? []).reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
+      )
+      const placedItemsCount = Number(
+        metrics.placedItemsCount ??
+          requestedItemsCount
+      )
+      const unplacedItemsCount = Number(
+        metrics.unplacedItemsCount ??
+          (Array.isArray(metrics.unplacedItems) ? metrics.unplacedItems.length : Math.max(0, requestedItemsCount - placedItemsCount))
+      )
+      const ai = (metrics.ai ?? null) as any
       return {
         id: p.id,
         name: p.name,
@@ -53,10 +70,20 @@ export async function GET(request: NextRequest) {
         vehiclePlate: p.vehicle?.plateNumber || '',
         status: p.status,
         totalWeight: p.totalWeight || 0,
-        utilization: Math.round((p.spaceUtilization || 0) * 1),
+        utilization: Number(p.spaceUtilization || 0),
+        optimizationScore: p.optimizationScore || 0,
+        layoutVersion: p.layoutVersion || 1,
         createdAt,
         createdBy: p.createdByUser?.name || '',
-        items: p.items?.length || 0,
+        items: requestedItemsCount,
+        requestedItemsCount,
+        placedItemsCount,
+        unplacedItemsCount,
+        criticalIssues,
+        warningIssues,
+        hasCritical: criticalIssues > 0,
+        aiStrategy: ai?.strategy ? String(ai.strategy) : null,
+        aiImproved: Boolean(ai?.improved ?? false),
         nomCompliant: Boolean(p.nom002Compliant && p.nom012Compliant && p.nom015Compliant),
       }
     })
@@ -176,6 +203,7 @@ export async function POST(request: NextRequest) {
           loadPlanId: created.id,
           productId: item.productId,
           quantity: item.quantity,
+          routeStop: item.routeStop ?? 1,
         }))
       )
 
@@ -198,6 +226,20 @@ export async function POST(request: NextRequest) {
             email: true,
           },
         },
+      },
+    })
+
+    await db.insert(activityLogs).values({
+      userId: auth.userId,
+      companyId: auth.companyId,
+      action: 'load_plan_created',
+      entityType: 'loadPlan',
+      entityId: newLoadPlan.id,
+      details: {
+        name,
+        itemsCount: items.length,
+        totalWeight,
+        utilization: spaceUtilization,
       },
     })
 

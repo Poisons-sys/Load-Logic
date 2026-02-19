@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Fragment, useEffect, useMemo, useState, useRef, useCallback } from "react";
+import React, { Fragment, useEffect, useMemo, useState, useRef, useCallback, useLayoutEffect } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, TransformControls } from "@react-three/drei";
@@ -15,6 +15,7 @@ export type Container3DProps = {
 
 export type Cube3DData = {
   id: string;
+  instanceId?: string;
   name?: string;
   productName?: string;
   color?: string;
@@ -27,6 +28,8 @@ export type Cube3DData = {
   rotY?: number; // rotación REAL en Y (radianes)
   weightKg?: number;
   weight?: number;
+  routeStop?: number;
+  loadingZone?: "front" | "center" | "rear";
   product?: {
     id?: string;
     name?: string;
@@ -47,12 +50,30 @@ type Props = {
   utilizationPercent?: number;
   onCubeClick?: (cube: Cube3DData) => void;
   onCubesChange?: (cubes: Cube3DData[]) => void;
+  onEditStatsChange?: (stats: LayoutEditStats) => void;
 };
 
 type CubeUpdateMode = "preview" | "commit";
 
+export type LayoutEditStats = {
+  moves: number;
+  swaps: number;
+  rotates: number;
+  undos: number;
+  redos: number;
+  keyNudges: number;
+  updatedAt: number;
+};
+
 const SNAP_STEP = 1;
 const GAP = 2;
+
+function cloneCubes(input: Cube3DData[]) {
+  return input.map((cube) => ({
+    ...cube,
+    product: cube.product ? { ...cube.product } : cube.product,
+  }));
+}
 
 function snap(v: number, step = SNAP_STEP) {
   return Math.round(v / step) * step;
@@ -280,7 +301,7 @@ function packEasyCargoRows(input: Cube3DData[], container: Container3DProps) {
       continue
     }
 
-    // ✅ CLAVE: colocar pegado al frente
+    // CLAVE: colocar pegado al frente
     // "Frente" = x máximo posible dentro del contenedor para esta fila
     const x = rowOffset
 
@@ -405,6 +426,7 @@ function ReferenceGrid({ width, depth }: { width: number; depth: number }) {
 function ProductCube({
   cube,
   container,
+  snapStep,
   onClick,
   isSelected,
   editable,
@@ -413,6 +435,7 @@ function ProductCube({
 }: {
   cube: Cube3DData;
   container: Container3DProps;
+  snapStep: number;
   onClick?: (cube: Cube3DData) => void;
   isSelected?: boolean;
   editable?: boolean;
@@ -438,13 +461,13 @@ function ProductCube({
 
     const next: Cube3DData = clampCubeInsideContainer({
       ...cube,
-      x: snap(raw.x),
-      y: snap(raw.y),
-      z: snap(raw.z),
+      x: snap(raw.x, snapStep),
+      y: snap(raw.y, snapStep),
+      z: snap(raw.z, snapStep),
     }, container);
 
     return next;
-  }, [container, cube]);
+  }, [container, cube, snapStep]);
 
   const handleObjectChange = useCallback(() => {
     const m = meshRef.current;
@@ -525,6 +548,63 @@ function ProductCube({
   return MeshEl;
 }
 
+function InstancedCubeLayer({
+  cubes,
+  container,
+  onCubeClick,
+}: {
+  cubes: Cube3DData[];
+  container: Container3DProps;
+  onCubeClick?: (cube: Cube3DData) => void;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh | null>(null);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const matrix = new THREE.Matrix4();
+    const color = new THREE.Color();
+
+    for (let i = 0; i < cubes.length; i++) {
+      const cube = cubes[i];
+      const [x, y, z] = cubeToCenteredPos(cube, container);
+      position.set(x, y, z);
+      quaternion.setFromEuler(new THREE.Euler(0, cube.rotY ?? 0, 0));
+      scale.set(cube.width, cube.height, cube.depth);
+      matrix.compose(position, quaternion, scale);
+      mesh.setMatrixAt(i, matrix);
+      color.set(cube.color ?? "#3B82F6");
+      mesh.setColorAt(i, color);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [container, cubes]);
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, cubes.length]}
+      castShadow
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        const id = event.instanceId;
+        if (id === undefined) return;
+        const cube = cubes[id];
+        if (!cube) return;
+        onCubeClick?.(cube);
+      }}
+    >
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial />
+    </instancedMesh>
+  );
+}
+
 export default function LoadVisualizer3D({
   container,
   cubes,
@@ -533,6 +613,7 @@ export default function LoadVisualizer3D({
   utilizationPercent,
   onCubeClick,
   onCubesChange,
+  onEditStatsChange,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const orbitRef = useRef<any>(null);
@@ -541,7 +622,40 @@ export default function LoadVisualizer3D({
   const [items, setItems] = useState<Cube3DData[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [isTransforming, setIsTransforming] = useState(false);
+  const [lockedIds, setLockedIds] = useState<string[]>([]);
+  const undoStackRef = useRef<Cube3DData[][]>([]);
+  const redoStackRef = useRef<Cube3DData[][]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+  const [redoCount, setRedoCount] = useState(0);
+  const [snapStep, setSnapStep] = useState(1);
+  const [visibleMaxY, setVisibleMaxY] = useState<number>(container.height);
+  const [editStats, setEditStats] = useState<LayoutEditStats>({
+    moves: 0,
+    swaps: 0,
+    rotates: 0,
+    undos: 0,
+    redos: 0,
+    keyNudges: 0,
+    updatedAt: 0,
+  });
   const shouldEmitChangesRef = useRef(false);
+
+  const syncHistoryCounts = useCallback(() => {
+    setUndoCount(undoStackRef.current.length);
+    setRedoCount(redoStackRef.current.length);
+  }, []);
+
+  const bumpStats = useCallback((delta: Partial<Omit<LayoutEditStats, "updatedAt">>) => {
+    setEditStats((prev) => ({
+      moves: prev.moves + (delta.moves ?? 0),
+      swaps: prev.swaps + (delta.swaps ?? 0),
+      rotates: prev.rotates + (delta.rotates ?? 0),
+      undos: prev.undos + (delta.undos ?? 0),
+      redos: prev.redos + (delta.redos ?? 0),
+      keyNudges: prev.keyNudges + (delta.keyNudges ?? 0),
+      updatedAt: Date.now(),
+    }));
+  }, []);
 
   // evitar que se quede pegado si se pierde mouseUp/touchEnd
   useEffect(() => {
@@ -560,6 +674,10 @@ export default function LoadVisualizer3D({
     if (!editMode) setIsTransforming(false);
   }, [editMode]);
 
+  useEffect(() => {
+    setVisibleMaxY(container.height);
+  }, [container.height]);
+
   // If cubes already include calculated coordinates, preserve them.
   // Otherwise, fallback to auto-packing rows.
   useEffect(() => {
@@ -568,6 +686,11 @@ export default function LoadVisualizer3D({
       height: container.height,
       depth: container.depth,
     };
+
+    setLockedIds([]);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    syncHistoryCounts();
 
     const normalized = (cubes ?? []).map((c) =>
       clampCubeInsideContainer(normalizeCubeXYZ(c, containerBounds), containerBounds)
@@ -583,7 +706,7 @@ export default function LoadVisualizer3D({
     }
 
     setItems(packEasyCargoRows(normalized, containerBounds));
-  }, [cubes, container.width, container.height, container.depth]);
+  }, [cubes, container.width, container.height, container.depth, syncHistoryCounts]);
 
   useEffect(() => {
     if (!shouldEmitChangesRef.current) return;
@@ -591,9 +714,17 @@ export default function LoadVisualizer3D({
     onCubesChange?.(items);
   }, [items, onCubesChange]);
 
+  useEffect(() => {
+    onEditStatsChange?.(editStats);
+  }, [editStats, onEditStatsChange]);
+
   const selectedCube = useMemo(
     () => items.find((c) => c.id === selectedId) ?? null,
     [items, selectedId]
+  );
+  const selectedLocked = useMemo(
+    () => (selectedId ? lockedIds.includes(selectedId) : false),
+    [lockedIds, selectedId]
   );
 
   const selectedName = useMemo(() => {
@@ -667,13 +798,13 @@ export default function LoadVisualizer3D({
       clampCubeInsideContainer(
         {
           ...candidate,
-          x: snap(candidate.x),
-          y: snap(candidate.y),
-          z: snap(candidate.z),
+          x: snap(candidate.x, snapStep),
+          y: snap(candidate.y, snapStep),
+          z: snap(candidate.z, snapStep),
         },
         container
       ),
-    [container]
+    [container, snapStep]
   );
 
   const tryAtAnchor = useCallback(
@@ -766,7 +897,7 @@ export default function LoadVisualizer3D({
     (movingFrom: Cube3DData, movingTo: Cube3DData, others: Cube3DData[]) => {
       const safeMoving = normalizeManualPlacement(movingTo);
       if (!collidesWithOthers(safeMoving, others)) {
-        return { moving: safeMoving, others };
+        return { moving: safeMoving, others, shiftedCount: 0 };
       }
 
       let relocatedOthers = [...others];
@@ -775,6 +906,26 @@ export default function LoadVisualizer3D({
         const db = Math.abs(b.x - safeMoving.x) + Math.abs(b.y - safeMoving.y) + Math.abs(b.z - safeMoving.z);
         return da - db;
       });
+
+      // Deterministic swap: if only one box collides, first try direct exchange.
+      if (initialCollisions.length === 1) {
+        const blocked = initialCollisions[0];
+        const withoutBlocked = relocatedOthers.filter((c) => c.id !== blocked.id);
+        const swappedBlocked = normalizeManualPlacement({
+          ...blocked,
+          x: movingFrom.x,
+          y: movingFrom.y,
+          z: movingFrom.z,
+        });
+
+        if (!collidesWithOthers(swappedBlocked, [safeMoving, ...withoutBlocked])) {
+          return {
+            moving: safeMoving,
+            others: [...withoutBlocked, swappedBlocked],
+            shiftedCount: 1,
+          };
+        }
+      }
 
       for (let i = 0; i < initialCollisions.length; i++) {
         const blockedId = initialCollisions[i]?.id;
@@ -798,7 +949,7 @@ export default function LoadVisualizer3D({
       }
 
       if (collidesWithOthers(safeMoving, relocatedOthers)) return null;
-      return { moving: safeMoving, others: relocatedOthers };
+      return { moving: safeMoving, others: relocatedOthers, shiftedCount: initialCollisions.length };
     },
     [collidesWithOthers, findNearestFreeSlot, getCollisions, normalizeManualPlacement]
   );
@@ -819,7 +970,7 @@ export default function LoadVisualizer3D({
       );
       if (!collidesWithOthers(stacked, others)) return stacked;
 
-      const step = Math.max(1, SNAP_STEP);
+      const step = Math.max(1, snapStep);
       const maxRadius = Math.max(rotated.width, rotated.depth) + GAP * 4;
       for (let radius = step; radius <= maxRadius; radius += step) {
         const offsets: Array<[number, number]> = [
@@ -852,8 +1003,49 @@ export default function LoadVisualizer3D({
 
       return null;
     },
-    [collidesWithOthers, container, normalizeManualPlacement]
+    [collidesWithOthers, container, normalizeManualPlacement, snapStep]
   );
+
+  const pushHistory = useCallback((snapshot: Cube3DData[]) => {
+    undoStackRef.current.push(cloneCubes(snapshot));
+    if (undoStackRef.current.length > 50) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+    syncHistoryCounts();
+  }, [syncHistoryCounts]);
+
+  const undoLayout = () => {
+    setItems((prev) => {
+      const previous = undoStackRef.current.pop();
+      if (!previous) {
+        syncHistoryCounts();
+        return prev;
+      }
+      redoStackRef.current.push(cloneCubes(prev));
+      syncHistoryCounts();
+      shouldEmitChangesRef.current = true;
+      setLayoutNotice("Se deshizo el ultimo cambio.");
+      bumpStats({ undos: 1 });
+      return cloneCubes(previous);
+    });
+  };
+
+  const redoLayout = () => {
+    setItems((prev) => {
+      const next = redoStackRef.current.pop();
+      if (!next) {
+        syncHistoryCounts();
+        return prev;
+      }
+      undoStackRef.current.push(cloneCubes(prev));
+      syncHistoryCounts();
+      shouldEmitChangesRef.current = true;
+      setLayoutNotice("Se rehizo el ultimo cambio.");
+      bumpStats({ redos: 1 });
+      return cloneCubes(next);
+    });
+  };
 
   // Rotate only the selected cube. Never re-pack all cargo.
   const rotateSelected90 = () => {
@@ -870,19 +1062,25 @@ export default function LoadVisualizer3D({
         return prev;
       }
 
+      pushHistory(prev);
       const next = prev.map((c) => (c.id === selectedId ? rotated : c));
       setLayoutNotice(null);
+      bumpStats({ rotates: 1 });
       shouldEmitChangesRef.current = true;
       return next;
     });
   };
 
-  const updateCube = (nextCube: Cube3DData, mode: CubeUpdateMode = "commit") => {
+  const updateCube = useCallback((nextCube: Cube3DData, mode: CubeUpdateMode = "commit") => {
     const safe = normalizeManualPlacement(nextCube);
 
     setItems((prev) => {
       const moving = prev.find((c) => c.id === safe.id);
       if (!moving) return prev;
+      if (lockedIds.includes(safe.id)) {
+        setLayoutNotice("Esa caja esta bloqueada. Desbloqueala para editar.");
+        return prev;
+      }
 
       if (mode === "preview") {
         const next = prev.map((c) => (c.id === safe.id ? safe : c));
@@ -899,16 +1097,78 @@ export default function LoadVisualizer3D({
       }
 
       const othersMap = new Map(resolved.others.map((c) => [c.id, c]));
+      pushHistory(prev);
       const next = prev.map((c) => {
         if (c.id === resolved.moving.id) return resolved.moving;
         return othersMap.get(c.id) ?? c;
       });
 
       setLayoutNotice(null);
+      bumpStats({ moves: 1, swaps: resolved.shiftedCount > 0 ? resolved.shiftedCount : 0 });
       shouldEmitChangesRef.current = true;
       return next;
     });
+  }, [bumpStats, lockedIds, normalizeManualPlacement, pushHistory, reflowAfterMove]);
+
+  const setSelectedPosition = (axis: "x" | "y" | "z", value: number) => {
+    if (!selectedId || !Number.isFinite(value)) return;
+    const selected = items.find((c) => c.id === selectedId);
+    if (!selected) return;
+    updateCube({ ...selected, [axis]: value }, "commit");
   };
+
+  const nudgeSelected = useCallback((dx: number, dy: number, dz: number) => {
+    if (!selectedId) return;
+    const selected = items.find((c) => c.id === selectedId);
+    if (!selected) return;
+    const next = {
+      ...selected,
+      x: selected.x + dx,
+      y: selected.y + dy,
+      z: selected.z + dz,
+    };
+    updateCube(next, "commit");
+    bumpStats({ keyNudges: 1 });
+  }, [bumpStats, items, selectedId, updateCube]);
+
+  useEffect(() => {
+    if (!editMode || !selectedId) return;
+
+    const onKeyDown = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) return;
+
+      const step = Math.max(1, snapStep);
+      if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        nudgeSelected(0, 0, -step);
+      } else if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        nudgeSelected(0, 0, step);
+      } else if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        nudgeSelected(-step, 0, 0);
+      } else if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        nudgeSelected(step, 0, 0);
+      } else if (ev.key === "PageUp") {
+        ev.preventDefault();
+        nudgeSelected(0, step, 0);
+      } else if (ev.key === "PageDown") {
+        ev.preventDefault();
+        nudgeSelected(0, -step, 0);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editMode, nudgeSelected, selectedId, snapStep, items]);
+
+  const renderedItems = useMemo(
+    () => items.filter((cube) => cube.y <= visibleMaxY + 0.001),
+    [items, visibleMaxY]
+  );
 
   return (
     <div className="w-full">
@@ -946,22 +1206,54 @@ export default function LoadVisualizer3D({
           <ReferenceGrid width={container.width} depth={container.depth} />
           <Container {...container} />
 
-          {items.map((cube) => (
-            <ProductCube
-              key={cube.id}
-              cube={cube}
-              container={container}
-              editable={editMode}
-              onUpdate={updateCube}
-              onTransformingChange={setIsTransforming}
-              isSelected={selectedId === cube.id}
-              onClick={(c) => {
-                setSelectedId(c.id);
-                if (editMode) setLayoutNotice(null);
-                onCubeClick?.(c);
-              }}
-            />
-          ))}
+          {renderedItems.length > 100 ? (
+            <>
+              <InstancedCubeLayer
+                cubes={renderedItems.filter((cube) => cube.id !== selectedId)}
+                container={container}
+                onCubeClick={(c) => {
+                  setSelectedId(c.id);
+                  if (editMode) setLayoutNotice(null);
+                  onCubeClick?.(c);
+                }}
+              />
+              {selectedCube && renderedItems.some((cube) => cube.id === selectedCube.id) && (
+                <ProductCube
+                  key={selectedCube.id}
+                  cube={selectedCube}
+                  container={container}
+                  snapStep={snapStep}
+                  editable={editMode && !lockedIds.includes(selectedCube.id)}
+                  onUpdate={updateCube}
+                  onTransformingChange={setIsTransforming}
+                  isSelected
+                  onClick={(c) => {
+                    setSelectedId(c.id);
+                    if (editMode) setLayoutNotice(null);
+                    onCubeClick?.(c);
+                  }}
+                />
+              )}
+            </>
+          ) : (
+            renderedItems.map((cube) => (
+              <ProductCube
+                key={cube.id}
+                cube={cube}
+                container={container}
+                snapStep={snapStep}
+                editable={editMode && !lockedIds.includes(cube.id)}
+                onUpdate={updateCube}
+                onTransformingChange={setIsTransforming}
+                isSelected={selectedId === cube.id}
+                onClick={(c) => {
+                  setSelectedId(c.id);
+                  if (editMode) setLayoutNotice(null);
+                  onCubeClick?.(c);
+                }}
+              />
+            ))
+          )}
         </Canvas>
       </div>
 
@@ -987,6 +1279,32 @@ export default function LoadVisualizer3D({
           </div>
 
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 rounded-md border px-2 py-1 text-xs">
+              <span className="text-gray-600">Snap</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={snapStep}
+                onChange={(e) => setSnapStep(clamp(Number(e.target.value) || 1, 1, 50))}
+                className="w-14 rounded border px-1 py-0.5 text-xs"
+              />
+            </label>
+
+            <label className="flex items-center gap-2 rounded-md border px-2 py-1 text-xs">
+              <span className="text-gray-600">Capa Y</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, container.height)}
+                step={1}
+                value={visibleMaxY}
+                onChange={(e) => setVisibleMaxY(Number(e.target.value))}
+                className="w-24"
+              />
+              <span className="w-10 text-right">{visibleMaxY.toFixed(0)}</span>
+            </label>
+
             <button
               type="button"
               onClick={() =>
@@ -1009,11 +1327,50 @@ export default function LoadVisualizer3D({
             <button
               type="button"
               onClick={rotateSelected90}
-              disabled={!selectedId}
+              disabled={!selectedId || selectedLocked}
               className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
               title="Rotar 90° (Y)"
             >
               Rotar 90°
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (!selectedId) return;
+                setLockedIds((prev) =>
+                  prev.includes(selectedId)
+                    ? prev.filter((id) => id !== selectedId)
+                    : [...prev, selectedId]
+                );
+                setLayoutNotice(
+                  selectedLocked
+                    ? "Caja desbloqueada para edicion."
+                    : "Caja bloqueada. Ya no se movera accidentalmente."
+                );
+              }}
+              disabled={!selectedId}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              {selectedLocked ? "Desbloquear" : "Bloquear"}
+            </button>
+
+            <button
+              type="button"
+              onClick={undoLayout}
+              disabled={undoCount === 0}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              Deshacer
+            </button>
+
+            <button
+              type="button"
+              onClick={redoLayout}
+              disabled={redoCount === 0}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              Rehacer
             </button>
 
             <button
@@ -1075,10 +1432,53 @@ export default function LoadVisualizer3D({
                   <div className="font-semibold">{selectedCube.product?.category ?? "—"}</div>
                 </div>
               </div>
+
+              {editMode && (
+                <div className="mt-4 rounded-md border bg-gray-50 p-3">
+                  <p className="mb-2 text-sm font-medium">Edicion fina</p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                    <label className="text-xs text-gray-600">
+                      X (avance)
+                      <input
+                        type="number"
+                        value={selectedCube.x}
+                        onChange={(e) => setSelectedPosition("x", Number(e.target.value))}
+                        className="mt-1 w-full rounded border bg-white px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <label className="text-xs text-gray-600">
+                      Y (altura)
+                      <input
+                        type="number"
+                        value={selectedCube.y}
+                        onChange={(e) => setSelectedPosition("y", Number(e.target.value))}
+                        className="mt-1 w-full rounded border bg-white px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <label className="text-xs text-gray-600">
+                      Z (lateral)
+                      <input
+                        type="number"
+                        value={selectedCube.z}
+                        onChange={(e) => setSelectedPosition("z", Number(e.target.value))}
+                        className="mt-1 w-full rounded border bg-white px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <div className="flex items-end text-xs text-gray-600">
+                      Flechas = mover, PgUp/PgDn = altura
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
+          <div className="mt-3 rounded-md border bg-gray-50 p-3 text-xs text-gray-700">
+            <span className="font-medium">Telemetria layout:</span>{" "}
+            mov:{editStats.moves} swap:{editStats.swaps} rot:{editStats.rotates} undo:{editStats.undos} redo:{editStats.redos} nudges:{editStats.keyNudges}
+          </div>
         </div>
       </div>
     </div>
   );
 }
+

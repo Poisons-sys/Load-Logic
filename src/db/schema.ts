@@ -113,6 +113,10 @@ export const products = pgTable('products', {
   fragility: fragilityEnum('fragility').default('baja'),
   stackable: boolean('stackable').default(true),
   maxStackHeight: integer('max_stack_height').default(1),
+  maxTopLoadKg: real('max_top_load_kg').default(2500),
+  allowRotate90: boolean('allow_rotate_90').default(true),
+  noStackAbove: boolean('no_stack_above').default(false),
+  floorOnly: boolean('floor_only').default(false),
   
   // Requisitos de temperatura
   temperatureReq: temperatureEnum('temperature_req').default('ambiente'),
@@ -189,6 +193,9 @@ export const loadPlans = pgTable('load_plans', {
   totalVolume: real('total_volume').default(0),
   spaceUtilization: real('space_utilization').default(0),
   weightDistribution: jsonb('weight_distribution'),
+  advancedMetrics: jsonb('advanced_metrics'),
+  optimizationScore: real('optimization_score').default(0),
+  layoutVersion: integer('layout_version').default(1),
   
   // Estado
   status: loadStatusEnum('status').default('pendiente'),
@@ -225,6 +232,7 @@ export const loadPlanItems = pgTable('load_plan_items', {
   
   // Orden de carga
   loadingOrder: integer('loading_order'),
+  routeStop: integer('route_stop').default(1),
   
   createdAt: timestamp('created_at').defaultNow(),
 })
@@ -238,6 +246,7 @@ export const loadPlanPlacements = pgTable('load_plan_placements', {
   itemId: uuid('item_id').references(() => loadPlanItems.id, { onDelete: 'set null' }),
   productId: uuid('product_id').notNull().references(() => products.id),
   pieceIndex: integer('piece_index').notNull().default(0),
+  instanceKey: varchar('instance_key', { length: 120 }),
 
   positionX: real('position_x').notNull(),
   positionY: real('position_y').notNull(),
@@ -263,6 +272,35 @@ export const loadingInstructions = pgTable('loading_instructions', {
   position: jsonb('position'),
   orientation: varchar('orientation', { length: 20 }),
   specialNotes: text('special_notes'),
+})
+
+// ============================================
+// TABLA: VERSIONES DE PLAN DE CARGA
+// ============================================
+export const loadPlanVersions = pgTable('load_plan_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  loadPlanId: uuid('load_plan_id').notNull().references(() => loadPlans.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  source: varchar('source', { length: 30 }).default('optimize'),
+  snapshot: jsonb('snapshot').notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+})
+
+// ============================================
+// TABLA: PLANTILLAS DE CARGA
+// ============================================
+export const loadPlanTemplates = pgTable('load_plan_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 255 }).notNull(),
+  description: text('description'),
+  companyId: uuid('company_id').references(() => companies.id, { onDelete: 'cascade' }),
+  vehicleId: uuid('vehicle_id').references(() => vehicles.id, { onDelete: 'set null' }),
+  items: jsonb('items').notNull(),
+  metadata: jsonb('metadata'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 })
 
 // ============================================
@@ -302,6 +340,7 @@ export const companiesRelations = relations(companies, ({ many }) => ({
   products: many(products),
   vehicles: many(vehicles),
   loadPlans: many(loadPlans),
+  loadPlanTemplates: many(loadPlanTemplates),
   activityLogs: many(activityLogs),
 }))
 
@@ -312,6 +351,8 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   }),
   sessions: many(sessions),
   loadPlans: many(loadPlans),
+  loadPlanVersions: many(loadPlanVersions),
+  loadPlanTemplates: many(loadPlanTemplates),
   reports: many(reports),
   activityLogs: many(activityLogs),
 }))
@@ -338,6 +379,7 @@ export const vehiclesRelations = relations(vehicles, ({ one, many }) => ({
     references: [companies.id],
   }),
   loadPlans: many(loadPlans),
+  loadPlanTemplates: many(loadPlanTemplates),
 }))
 
 export const loadPlansRelations = relations(loadPlans, ({ one, many }) => ({
@@ -356,6 +398,7 @@ export const loadPlansRelations = relations(loadPlans, ({ one, many }) => ({
   items: many(loadPlanItems),
   placements: many(loadPlanPlacements),
   instructions: many(loadingInstructions),
+  versions: many(loadPlanVersions),
   reports: many(reports),
 }))
 
@@ -394,6 +437,32 @@ export const loadingInstructionsRelations = relations(loadingInstructions, ({ on
   item: one(loadPlanItems, {
     fields: [loadingInstructions.itemId],
     references: [loadPlanItems.id],
+  }),
+}))
+
+export const loadPlanVersionsRelations = relations(loadPlanVersions, ({ one }) => ({
+  loadPlan: one(loadPlans, {
+    fields: [loadPlanVersions.loadPlanId],
+    references: [loadPlans.id],
+  }),
+  createdByUser: one(users, {
+    fields: [loadPlanVersions.createdBy],
+    references: [users.id],
+  }),
+}))
+
+export const loadPlanTemplatesRelations = relations(loadPlanTemplates, ({ one }) => ({
+  company: one(companies, {
+    fields: [loadPlanTemplates.companyId],
+    references: [companies.id],
+  }),
+  vehicle: one(vehicles, {
+    fields: [loadPlanTemplates.vehicleId],
+    references: [vehicles.id],
+  }),
+  createdByUser: one(users, {
+    fields: [loadPlanTemplates.createdBy],
+    references: [users.id],
   }),
 }))
 

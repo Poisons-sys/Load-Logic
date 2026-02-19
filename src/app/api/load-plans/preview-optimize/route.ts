@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { vehicleId, items } = parsedBody.data
+    const { vehicleId, items, strategy, iterations } = parsedBody.data
 
     const vehicle = await db.query.vehicles.findFirst({
       where: and(
@@ -80,22 +80,25 @@ export async function POST(request: NextRequest) {
     type AlgoProduct = ProductsForOptimization[number]['product']
     type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
 
-    const productsForOptimization: ProductsForOptimization = items
-      .map((item) => {
-        const product = productsById.get(item.productId)
-        if (!product) return null
+    const productsForOptimization = items.reduce<ProductsForOptimization>((acc, item) => {
+      const product = productsById.get(item.productId)
+      if (!product) return acc
 
-        const normalized = nullsToUndefined(product)
-        const normalizedProduct: AlgoProduct = {
-          ...(normalized as unknown as AlgoProduct),
-          hsCode: normalized.hsCode ?? undefined,
-          description: normalized.description ?? '',
-          subcategory: normalized.subcategory ?? 'Sin subcategoria',
-        }
+      const normalized = nullsToUndefined(product)
+      const normalizedProduct: AlgoProduct = {
+        ...(normalized as unknown as AlgoProduct),
+        hsCode: normalized.hsCode ?? undefined,
+        description: normalized.description ?? '',
+        subcategory: normalized.subcategory ?? 'Sin subcategoria',
+      }
 
-        return { product: normalizedProduct, quantity: item.quantity }
+      acc.push({
+        product: normalizedProduct,
+        quantity: item.quantity,
+        routeStop: item.routeStop ?? 1,
       })
-      .filter((x): x is ProductsForOptimization[number] => Boolean(x))
+      return acc
+    }, [])
 
     if (productsForOptimization.length === 0) {
       return NextResponse.json(
@@ -113,7 +116,10 @@ export async function POST(request: NextRequest) {
       maxWeight: toNum(normalizedVehicle.maxWeight, 0),
     }
 
-    const optimization = await optimizeLoad(productsForOptimization, vehicleForOptimization)
+    const optimization = await optimizeLoad(productsForOptimization, vehicleForOptimization, {
+      strategy,
+      iterations,
+    })
 
     return NextResponse.json({
       success: true,
