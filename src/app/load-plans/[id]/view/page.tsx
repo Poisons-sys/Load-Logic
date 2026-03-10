@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import { ArrowLeft, FileDown, History, Pencil, RotateCcw } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, FileDown, History, Pencil, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -36,6 +36,7 @@ type PlanItem = {
 type PlanInstruction = {
   id: string
   step: number
+  description?: string | null
   position?: any
 }
 
@@ -129,6 +130,8 @@ export default function LoadPlan3DViewPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null)
+  const [activeStepIndex, setActiveStepIndex] = useState(0)
+  const [completedSteps, setCompletedSteps] = useState<string[]>([])
 
   const fetchPlan = useCallback(async () => {
     if (!planId) return
@@ -318,6 +321,63 @@ export default function LoadPlan3DViewPage() {
     return out
   }, [plan, container])
 
+  const operationalSteps = useMemo(() => {
+    const sorted = (plan?.instructions ?? [])
+      .slice()
+      .sort((a, b) => Number(a.step ?? 0) - Number(b.step ?? 0))
+
+    return sorted.map((ins, idx) => {
+      const pos = (ins.position ?? {}) as any
+      const algoX = Number(pos?.x ?? 0)
+      const algoY = Number(pos?.y ?? 0)
+      const algoZ = Number(pos?.z ?? 0)
+
+      const cube = cubes.find((c) => {
+        const dx = Math.abs(Number(c.z ?? 0) - algoX)
+        const dy = Math.abs(Number(c.y ?? 0) - algoY)
+        const dz = Math.abs(Number(c.x ?? 0) - algoZ)
+        return dx <= 1 && dy <= 1 && dz <= 1
+      })
+
+      return {
+        id: String(ins.id ?? `step-${idx}`),
+        step: Number(ins.step ?? idx + 1),
+        description: String(ins.description ?? ''),
+        productName: String(pos?.product?.name ?? '-'),
+        routeStop: Number(pos?.routeStop ?? 1),
+        loadingZone: String(pos?.loadingZone ?? '-'),
+        position: { x: algoX, y: algoY, z: algoZ },
+        cubeId: cube?.id ?? null,
+      }
+    })
+  }, [plan?.instructions, cubes])
+
+  useEffect(() => {
+    if (operationalSteps.length === 0) {
+      setActiveStepIndex(0)
+      setCompletedSteps([])
+      return
+    }
+    setActiveStepIndex((prev) => Math.min(Math.max(prev, 0), operationalSteps.length - 1))
+  }, [operationalSteps.length])
+
+  const activeStep = operationalSteps[activeStepIndex] ?? null
+  const visualizerCubes = useMemo(() => {
+    if (!activeStep?.cubeId) return cubes
+    return cubes.map((cube) => {
+      if (cube.id === activeStep.cubeId) {
+        return { ...cube, color: '#16A34A' }
+      }
+      return { ...cube, color: '#CBD5E1' }
+    })
+  }, [cubes, activeStep?.cubeId])
+
+  const toggleCompleted = (stepId: string) => {
+    setCompletedSteps((prev) =>
+      prev.includes(stepId) ? prev.filter((id) => id !== stepId) : [...prev, stepId]
+    )
+  }
+
   const restoreVersion = async (version: PlanVersion) => {
     if (!planId) return
 
@@ -475,9 +535,86 @@ export default function LoadPlan3DViewPage() {
           <CardTitle>Visualizacion 3D</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <LoadVisualizer3D container={container} cubes={cubes} />
+          <LoadVisualizer3D container={container} cubes={visualizerCubes} />
         </CardContent>
       </Card>
+
+      {operationalSteps.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Modo Operativo: Instrucciones de Carga</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <p className="text-sm text-gray-500">Paso actual</p>
+                <p className="text-lg font-semibold">
+                  {activeStep ? `Paso ${activeStep.step} de ${operationalSteps.length}` : '-'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeStepIndex <= 0}
+                  onClick={() => setActiveStepIndex((i) => Math.max(0, i - 1))}
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  Anterior
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeStepIndex >= operationalSteps.length - 1}
+                  onClick={() => setActiveStepIndex((i) => Math.min(operationalSteps.length - 1, i + 1))}
+                >
+                  Siguiente
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+                {activeStep && (
+                  <Button size="sm" onClick={() => toggleCompleted(activeStep.id)}>
+                    <CheckCircle2 className="h-4 w-4 mr-1" />
+                    {completedSteps.includes(activeStep.id) ? 'Desmarcar' : 'Completar'}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {activeStep && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                <div className="rounded border p-3 bg-gray-50">
+                  <p className="text-gray-500">Producto</p>
+                  <p className="font-semibold">{activeStep.productName}</p>
+                </div>
+                <div className="rounded border p-3 bg-gray-50">
+                  <p className="text-gray-500">Parada</p>
+                  <p className="font-semibold">{activeStep.routeStop}</p>
+                </div>
+                <div className="rounded border p-3 bg-gray-50">
+                  <p className="text-gray-500">Zona</p>
+                  <p className="font-semibold capitalize">{activeStep.loadingZone}</p>
+                </div>
+                <div className="rounded border p-3 bg-gray-50">
+                  <p className="text-gray-500">Posicion (x,y,z)</p>
+                  <p className="font-semibold">
+                    ({activeStep.position.x.toFixed(0)}, {activeStep.position.y.toFixed(0)}, {activeStep.position.z.toFixed(0)})
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded border p-3 bg-white">
+              <p className="text-xs text-gray-500">Resumen operativo</p>
+              <p className="text-sm">
+                Completados: <strong>{completedSteps.length}</strong> / {operationalSteps.length}
+              </p>
+              {activeStep?.description && (
+                <p className="text-sm text-gray-700 mt-2">{activeStep.description}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

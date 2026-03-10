@@ -57,7 +57,7 @@ export default function Sidebar({
   return (
     <aside
       className={cn(
-        'bg-gray-900 text-white min-h-screen flex flex-col transition-all duration-200',
+        'sticky top-16 self-start h-[calc(100vh-4rem)] overflow-y-auto bg-gray-900 text-white flex flex-col transition-all duration-200',
         collapsed ? 'w-20' : 'w-64'
       )}
     >

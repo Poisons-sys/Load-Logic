@@ -37,6 +37,11 @@ type EditableRow = {
   routeStop: number
 }
 
+type FloatingNotice = {
+  type: 'success' | 'error'
+  message: string
+} | null
+
 export default function EditLoadPlanPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
@@ -45,7 +50,7 @@ export default function EditLoadPlanPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
+  const [notice, setNotice] = useState<FloatingNotice>(null)
 
   const [products, setProducts] = useState<CatalogProduct[]>([])
   const [vehicles, setVehicles] = useState<CatalogVehicle[]>([])
@@ -108,6 +113,12 @@ export default function EditLoadPlanPage() {
     void fetchData()
   }, [fetchData])
 
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 3200)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
   const productsById = useMemo(
     () => new Map(products.map((p) => [p.id, p] as const)),
     [products]
@@ -145,7 +156,7 @@ export default function EditLoadPlanPage() {
 
   const save = async () => {
     if (!planId) return
-    setSuccess(null)
+    setNotice(null)
     setError(null)
 
     const trimmedName = name.trim()
@@ -189,14 +200,20 @@ export default function EditLoadPlanPage() {
         throw new Error(e?.error ?? 'No se pudo guardar el plan')
       }
 
-      setSuccess(
-        'Plan actualizado y reoptimizado con la nueva configuracion.'
-      )
+      setNotice({
+        type: 'success',
+        message: 'Plan actualizado y reoptimizado con la nueva configuracion.',
+      })
       setTimeout(() => {
         router.push(`/load-plans/${planId}/view`)
       }, 900)
     } catch (e: any) {
-      setError(e?.message ?? 'Error guardando cambios')
+      const message = e?.message ?? 'Error guardando cambios'
+      setError(message)
+      setNotice({
+        type: 'error',
+        message,
+      })
     } finally {
       setSaving(false)
     }
@@ -206,6 +223,18 @@ export default function EditLoadPlanPage() {
 
   return (
     <div className="p-6 space-y-4">
+      {notice && (
+        <div
+          className={`fixed right-6 top-20 z-50 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm ${
+            notice.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : 'border-red-200 bg-red-50 text-red-800'
+          }`}
+        >
+          <p className="text-sm font-medium">{notice.message}</p>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={() => router.push(`/load-plans/${planId}/view`)}>
@@ -227,13 +256,6 @@ export default function EditLoadPlanPage() {
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-red-600">{error}</p>
-          </CardContent>
-        </Card>
-      )}
-      {success && (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-green-700">{success}</p>
           </CardContent>
         </Card>
       )}
