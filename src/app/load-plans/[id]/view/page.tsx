@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import { ArrowLeft, FileDown, History, RotateCcw } from 'lucide-react'
+import { ArrowLeft, FileDown, History, Pencil, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -458,10 +458,16 @@ export default function LoadPlan3DViewPage() {
           </div>
         </div>
 
-        <Button variant="outline" onClick={downloadPdf}>
-          <FileDown className="h-4 w-4 mr-2" />
-          Descargar PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => router.push(`/load-plans/${planId}/edit`)}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Editar
+          </Button>
+          <Button variant="outline" onClick={downloadPdf}>
+            <FileDown className="h-4 w-4 mr-2" />
+            Descargar PDF
+          </Button>
+        </div>
       </div>
 
       <Card>

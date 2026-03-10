@@ -70,6 +70,13 @@ export async function PUT(
 
     const existingLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
+      with: {
+        items: {
+          with: {
+            product: true,
+          },
+        },
+      },
     })
 
     if (!existingLoadPlan) {
@@ -85,93 +92,128 @@ export async function PUT(
       )
     }
 
-    const { name, description, status, items } = parsedBody.data
+    const { name, description, vehicleId, status, items } = parsedBody.data
 
     let totalWeight = existingLoadPlan.totalWeight
     let totalVolume = existingLoadPlan.totalVolume
     let spaceUtilization = existingLoadPlan.spaceUtilization
     const nextName = name || existingLoadPlan.name
     const nextDescription = description !== undefined ? description : existingLoadPlan.description
-    const nextStatus = status || existingLoadPlan.status
+    const targetVehicleId = vehicleId ?? existingLoadPlan.vehicleId
+    const hasItemsChange = Array.isArray(items) && items.length > 0
+    const hasVehicleChange = Boolean(vehicleId) && vehicleId !== existingLoadPlan.vehicleId
+    const hasStructuralChange = hasItemsChange || hasVehicleChange
+    const nextStatus = hasStructuralChange ? 'pendiente' : (status || existingLoadPlan.status)
 
-    if (items && Array.isArray(items) && items.length > 0) {
-      if (!existingLoadPlan.vehicleId) {
-        return NextResponse.json(
-          { error: 'Plan de carga sin vehiculo asignado' },
-          { status: 400 }
-        )
-      }
+    if (!targetVehicleId) {
+      return NextResponse.json(
+        { error: 'Plan de carga sin vehiculo asignado' },
+        { status: 400 }
+      )
+    }
 
-      const vehicle = await db.query.vehicles.findFirst({
-        where: eq(vehicles.id, existingLoadPlan.vehicleId),
+    const vehicle = await db.query.vehicles.findFirst({
+      where: and(
+        eq(vehicles.id, targetVehicleId),
+        eq(vehicles.companyId, auth.companyId)
+      ),
+    })
+
+    if (!vehicle) {
+      return NextResponse.json({ error: 'Vehiculo no encontrado' }, { status: 404 })
+    }
+
+    const allProducts = await db.query.products.findMany({
+      where: and(
+        eq(products.companyId, auth.companyId),
+        eq(products.isActive, true)
+      ),
+    })
+    const productsById = new Map(allProducts.map((p) => [p.id, p] as const))
+
+    const effectiveItems = hasItemsChange
+      ? items
+      : existingLoadPlan.items
+          .filter((item) => item.productId)
+          .map((item) => ({
+            productId: String(item.productId),
+            quantity: Number(item.quantity ?? 0),
+            routeStop: Number((item as any).routeStop ?? 1),
+          }))
+
+    totalWeight = 0
+    totalVolume = 0
+    const nextItemsRows: Array<{ loadPlanId: string; productId: string; quantity: number; routeStop: number }> = []
+
+    for (const item of effectiveItems) {
+      const product = productsById.get(item.productId)
+      if (!product) continue
+
+      totalWeight += Number(product.weight ?? 0) * Number(item.quantity ?? 0)
+      totalVolume += Number(product.volume ?? 0) * Number(item.quantity ?? 0)
+      nextItemsRows.push({
+        loadPlanId: id,
+        productId: item.productId,
+        quantity: Number(item.quantity ?? 0),
+        routeStop: item.routeStop ?? 1,
       })
+    }
 
-      if (!vehicle) {
-        return NextResponse.json({ error: 'Vehiculo no encontrado' }, { status: 404 })
-      }
+    if (nextItemsRows.length === 0) {
+      return NextResponse.json(
+        { error: 'No hay productos validos para guardar en el plan' },
+        { status: 400 }
+      )
+    }
 
-      const allProducts = await db.query.products.findMany({
-        where: eq(products.companyId, auth.companyId),
-      })
-      const productsById = new Map(allProducts.map((p) => [p.id, p] as const))
+    if (totalWeight > Number(vehicle.maxWeight ?? 0)) {
+      return NextResponse.json(
+        { error: `El peso total (${totalWeight}kg) excede la capacidad del vehiculo (${vehicle.maxWeight}kg)` },
+        { status: 400 }
+      )
+    }
 
-      totalWeight = 0
-      totalVolume = 0
-      const nextItemsRows: Array<{ loadPlanId: string; productId: string; quantity: number; routeStop: number }> = []
+    if (totalVolume > Number(vehicle.maxVolume ?? 0)) {
+      return NextResponse.json(
+        { error: `El volumen total (${totalVolume}m3) excede la capacidad del vehiculo (${vehicle.maxVolume}m3)` },
+        { status: 400 }
+      )
+    }
 
-      for (const item of items) {
-        const product = productsById.get(item.productId)
-        if (!product) continue
+    const maxVol = Number(vehicle.maxVolume ?? 0)
+    spaceUtilization = maxVol > 0 ? (totalVolume / maxVol) * 100 : 0
 
-        totalWeight += product.weight * item.quantity
-        totalVolume += product.volume * item.quantity
-        nextItemsRows.push({
-          loadPlanId: id,
-          productId: item.productId,
-          quantity: item.quantity,
-          routeStop: item.routeStop ?? 1,
-        })
-      }
-
-      const maxVol = Number(vehicle.maxVolume ?? 0)
-      spaceUtilization = maxVol > 0 ? (totalVolume / maxVol) * 100 : 0
-
-      await db.transaction(async (tx) => {
+    await db.transaction(async (tx) => {
+      if (hasStructuralChange) {
         await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
         await tx.delete(loadPlanVersions).where(eq(loadPlanVersions.loadPlanId, id))
         await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
-        await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
-        if (nextItemsRows.length > 0) {
-          await tx.insert(loadPlanItems).values(nextItemsRows)
-        }
+      }
 
-        await tx
-          .update(loadPlans)
-          .set({
-            name: nextName,
-            description: nextDescription,
-            status: nextStatus,
-            totalWeight,
-            totalVolume,
-            spaceUtilization,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
-      })
-    } else {
-      await db
+      if (hasItemsChange) {
+        await tx.delete(loadPlanItems).where(eq(loadPlanItems.loadPlanId, id))
+        await tx.insert(loadPlanItems).values(nextItemsRows)
+      }
+
+      await tx
         .update(loadPlans)
         .set({
           name: nextName,
           description: nextDescription,
+          vehicleId: targetVehicleId,
           status: nextStatus,
           totalWeight,
           totalVolume,
           spaceUtilization,
+          weightDistribution: hasStructuralChange ? { front: 0, center: 0, rear: 0 } : existingLoadPlan.weightDistribution,
+          advancedMetrics: hasStructuralChange ? null : existingLoadPlan.advancedMetrics,
+          optimizationScore: hasStructuralChange ? 0 : existingLoadPlan.optimizationScore,
+          layoutVersion: hasStructuralChange ? 1 : existingLoadPlan.layoutVersion,
+          nom012Compliant: Boolean(vehicle.nom012Compliant),
           updatedAt: new Date(),
         })
         .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
-    }
+    })
 
     const completeLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),

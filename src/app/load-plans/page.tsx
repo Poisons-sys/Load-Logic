@@ -9,6 +9,7 @@ import {
   Clock,
   Eye,
   FileDown,
+  Pencil,
   Search,
   Trash2,
 } from 'lucide-react'
@@ -175,6 +176,9 @@ export default function LoadPlansPage() {
 
   const goTo3D = (id: string) => {
     router.push(`/load-plans/${id}/view`)
+  }
+  const goToEdit = (id: string) => {
+    router.push(`/load-plans/${id}/edit`)
   }
 
   const deletePlan = async (id: string) => {
@@ -512,6 +516,10 @@ export default function LoadPlansPage() {
                               <Eye className="h-4 w-4 mr-2" />
                               Ver 3D
                             </Button>
+                            <Button variant="outline" className="flex-1" onClick={() => goToEdit(plan.id)}>
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Editar
+                            </Button>
                             <Button
                               variant="outline"
                               className="flex-1"
@@ -524,6 +532,14 @@ export default function LoadPlansPage() {
                           </div>
                         </DialogContent>
                       </Dialog>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => goToEdit(plan.id)}
+                        title="Editar"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"

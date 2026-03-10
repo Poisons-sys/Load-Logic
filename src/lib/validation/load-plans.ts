@@ -16,6 +16,7 @@ export const createLoadPlanSchema = z.object({
 export const updateLoadPlanSchema = z.object({
   name: z.string().trim().min(1).optional(),
   description: z.string().trim().nullable().optional(),
+  vehicleId: z.string().trim().min(1).optional(),
   status: z.enum(['pendiente', 'optimizado', 'aprobado', 'ejecutado']).optional(),
   items: z.array(loadPlanItemInputSchema).min(1).optional(),
 })
