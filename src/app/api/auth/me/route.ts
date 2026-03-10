@@ -4,6 +4,34 @@ import { users } from '@/db/schema'
 import { eq } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 
+type NotificationSettings = {
+  emailAlerts: boolean
+  loadCompleted: boolean
+  nomExpiration: boolean
+  weightAlerts: boolean
+  weeklyReports: boolean
+}
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  emailAlerts: false,
+  loadCompleted: false,
+  nomExpiration: false,
+  weightAlerts: false,
+  weeklyReports: false,
+}
+
+function normalizeNotificationSettings(value: unknown): NotificationSettings {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_NOTIFICATION_SETTINGS }
+  const raw = value as Partial<NotificationSettings>
+  return {
+    emailAlerts: Boolean(raw.emailAlerts),
+    loadCompleted: Boolean(raw.loadCompleted),
+    nomExpiration: Boolean(raw.nomExpiration),
+    weightAlerts: Boolean(raw.weightAlerts),
+    weeklyReports: Boolean(raw.weeklyReports),
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request)
@@ -32,6 +60,7 @@ export async function GET(request: NextRequest) {
           role: user.role,
           companyId: user.companyId,
           isActive: user.isActive,
+          notificationSettings: normalizeNotificationSettings(user.notificationSettings),
         },
         company: user.company ? { id: user.company.id, name: user.company.name } : undefined,
       },
@@ -53,7 +82,7 @@ export async function PUT(request: NextRequest) {
     const auth = await requireAuth(request)
 
     const body = await request.json()
-    const { name, email } = body
+    const { name, email, notificationSettings } = body
 
     // Verificar si el email ya está en uso por otro usuario
     if (email) {
@@ -73,6 +102,10 @@ export async function PUT(request: NextRequest) {
       .set({
         name: name || undefined,
         email: email ? email.toLowerCase() : undefined,
+        notificationSettings:
+          notificationSettings !== undefined
+            ? normalizeNotificationSettings(notificationSettings)
+            : undefined,
         updatedAt: new Date(),
       })
       .where(eq(users.id, auth.userId))
@@ -85,6 +118,7 @@ export async function PUT(request: NextRequest) {
         id: updatedUser.id,
         name: updatedUser.name,
         email: updatedUser.email,
+        notificationSettings: normalizeNotificationSettings(updatedUser.notificationSettings),
       },
     })
   } catch (error) {

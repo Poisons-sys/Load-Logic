@@ -8,7 +8,8 @@ import {
   integer, 
   real, 
   jsonb,
-  pgEnum
+  pgEnum,
+  uniqueIndex
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
@@ -59,6 +60,7 @@ export const users = pgTable('users', {
   password: varchar('password', { length: 255 }).notNull(),
   name: varchar('name', { length: 255 }).notNull(),
   role: userRoleEnum('role').default('operativo'),
+  notificationSettings: jsonb('notification_settings'),
   companyId: uuid('company_id').references(() => companies.id, { onDelete: 'cascade' }),
   isActive: boolean('is_active').default(true),
   lastLogin: timestamp('last_login'),
@@ -333,6 +335,24 @@ export const activityLogs = pgTable('activity_logs', {
 })
 
 // ============================================
+// TABLA: ALERTAS LEIDAS POR USUARIO
+// ============================================
+export const userAlertReads = pgTable(
+  'user_alert_reads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    alertId: varchar('alert_id', { length: 200 }).notNull(),
+    readAt: timestamp('read_at').defaultNow(),
+  },
+  (table) => ({
+    userAlertUniqueIdx: uniqueIndex('user_alert_reads_user_alert_idx').on(table.userId, table.alertId),
+  })
+)
+
+// ============================================
 // RELACIONES
 // ============================================
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -355,6 +375,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   loadPlanTemplates: many(loadPlanTemplates),
   reports: many(reports),
   activityLogs: many(activityLogs),
+  alertReads: many(userAlertReads),
 }))
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -485,5 +506,12 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
   company: one(companies, {
     fields: [activityLogs.companyId],
     references: [companies.id],
+  }),
+}))
+
+export const userAlertReadsRelations = relations(userAlertReads, ({ one }) => ({
+  user: one(users, {
+    fields: [userAlertReads.userId],
+    references: [users.id],
   }),
 }))

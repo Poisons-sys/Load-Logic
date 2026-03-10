@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { vehicles, loadPlans } from '@/db/schema'
-import { and, desc, eq, lt } from 'drizzle-orm'
+import { vehicles, loadPlans, userAlertReads } from '@/db/schema'
+import { and, desc, eq, inArray, lt } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 
 type Alert = {
@@ -9,6 +9,7 @@ type Alert = {
   message: string
   type: 'warning' | 'success' | 'info'
   vehicle?: string
+  isRead?: boolean
 }
 
 /**
@@ -68,12 +69,74 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({ success: true, data: alerts.slice(0, 10) })
+    const limitedAlerts = alerts.slice(0, 10)
+    const alertIds = limitedAlerts.map((a) => a.id)
+
+    let readSet = new Set<string>()
+    if (alertIds.length > 0) {
+      const reads = await db.query.userAlertReads.findMany({
+        where: and(
+          eq(userAlertReads.userId, auth.userId),
+          inArray(userAlertReads.alertId, alertIds)
+        ),
+      })
+      readSet = new Set(reads.map((r) => String(r.alertId)))
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: limitedAlerts.map((a) => ({
+        ...a,
+        isRead: readSet.has(a.id),
+      })),
+    })
   } catch (error) {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     console.error('Error obteniendo alertas:', error)
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const auth = await requireAuth(request)
+    const body = await request.json().catch(() => ({}))
+    const alertIdsRaw = Array.isArray(body?.alertIds) ? body.alertIds : []
+    const alertIds: string[] = Array.from(
+      new Set(
+        alertIdsRaw
+          .map((id: unknown) => String(id || '').trim())
+          .filter((id: string) => id.length > 0)
+      )
+    )
+
+    if (alertIds.length === 0) {
+      return NextResponse.json({ error: 'alertIds es requerido' }, { status: 400 })
+    }
+
+    await db
+      .insert(userAlertReads)
+      .values(
+        alertIds.map((alertId) => ({
+          userId: auth.userId,
+          alertId,
+          readAt: new Date(),
+        }))
+      )
+      .onConflictDoNothing()
+
+    return NextResponse.json({
+      success: true,
+      message: 'Alertas marcadas como leidas',
+      count: alertIds.length,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'UNAUTHORIZED') {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+    }
+    console.error('Error marcando alertas como leidas:', error)
     return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
 }

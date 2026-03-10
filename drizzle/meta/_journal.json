@@ -29,6 +29,20 @@
       "when": 1770800400000,
       "tag": "0003_instance_key_placements",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1770886800000,
+      "tag": "0004_user_notification_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1770973200000,
+      "tag": "0005_user_alert_reads",
+      "breakpoints": true
     }
   ]
 }
