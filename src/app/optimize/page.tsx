@@ -828,7 +828,6 @@ export default function OptimizePage() {
           vehicleId: vehicle.id,
           items: validSelected.map(it => ({ productId: it.product.id, quantity: it.quantity, routeStop: it.routeStop })),
           strategy: optimizationStrategy,
-          iterations: optimizationStrategy === 'intelligent' ? 16 : undefined,
         }),
       })
 
@@ -1255,7 +1254,7 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-gray-500">
-                  En modo IA se calcula primero base y luego se evalúan multiples acomodos para elegir el mejor.
+                  En modo IA se calcula primero base y luego se evalúan 4 o 6 escenarios para elegir el mejor.
                 </p>
               </div>
             </CardContent>

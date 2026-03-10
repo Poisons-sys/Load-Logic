@@ -275,3 +275,51 @@ test('si hay apilado, la fragilidad de arriba nunca es menor que la base', async
   )
   assertNoOverlaps(result.placedItems)
 })
+
+test('intelligent usa 6 escenarios para carga ligera', async () => {
+  const vehicle = makeVehicle({
+    internalLength: 1200,
+    internalWidth: 240,
+    internalHeight: 260,
+    maxWeight: 24_000,
+  })
+  const light = makeProduct('p-light', {
+    length: 100,
+    width: 80,
+    height: 60,
+    weight: 90,
+  })
+
+  const result = await optimizeLoad(
+    [{ product: light, quantity: 10 }],
+    vehicle,
+    { strategy: 'intelligent', seed: 1234 }
+  )
+
+  assert.equal(result.ai?.strategy, 'intelligent')
+  assert.equal(result.ai?.candidatesEvaluated, 6)
+})
+
+test('intelligent usa 4 escenarios para optimizacion grande', async () => {
+  const vehicle = makeVehicle({
+    internalLength: 1200,
+    internalWidth: 240,
+    internalHeight: 260,
+    maxWeight: 24_000,
+  })
+  const heavy = makeProduct('p-heavy', {
+    length: 120,
+    width: 100,
+    height: 100,
+    weight: 850,
+  })
+
+  const result = await optimizeLoad(
+    [{ product: heavy, quantity: 14 }],
+    vehicle,
+    { strategy: 'intelligent', seed: 5678 }
+  )
+
+  assert.equal(result.ai?.strategy, 'intelligent')
+  assert.equal(result.ai?.candidatesEvaluated, 4)
+})

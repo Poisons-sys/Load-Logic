@@ -357,6 +357,7 @@ export class BinPacking3D {
   private maxWeight: number
   private currentWeight: number
   private spaceMap: number[][][]
+  private topLoadByPlacedIndex: number[]
   private maxRouteStop: number
   private tuning: BinPackingSearchTuning
 
@@ -375,6 +376,7 @@ export class BinPacking3D {
     this.maxWeight = maxWeight
     this.currentWeight = 0
     this.maxRouteStop = 1
+    this.topLoadByPlacedIndex = []
     this.tuning = { ...DEFAULT_TUNING, ...tuning }
 
     const res = this.resolution
@@ -462,6 +464,8 @@ export class BinPacking3D {
     this.placedItems.push(placedItem)
     this.currentWeight += item.weight
     this.markSpaceAsOccupied(search.best.grid, placedIndex)
+    this.topLoadByPlacedIndex[placedIndex] = this.topLoadByPlacedIndex[placedIndex] ?? 0
+    this.propagateTopLoadToSupporters(search.best.supporterIds, item.weight)
     if (!this.preferredRotationByProductId.has(item.product.id)) {
       this.preferredRotationByProductId.set(item.product.id, search.best.rotation.rotation.y)
     }
@@ -484,7 +488,8 @@ export class BinPacking3D {
 
     for (const rotation of rotations) {
       const stepsX = Math.floor((this.container.width - rotation.w) / this.resolution) + 1
-      const stepsY = Math.floor((this.container.height - rotation.h) / this.resolution) + 1
+      const rawStepsY = Math.floor((this.container.height - rotation.h) / this.resolution) + 1
+      const stepsY = item.handlingRules.floorOnly ? Math.min(rawStepsY, 1) : rawStepsY
       const stepsZ = Math.floor((this.container.depth - rotation.d) / this.resolution) + 1
 
       if (stepsX <= 0 || stepsY <= 0 || stepsZ <= 0) {
@@ -522,6 +527,9 @@ export class BinPacking3D {
             if (score < bestScore) {
               bestScore = score
               best = evaluation.candidate
+              if (bestScore === 0) {
+                return { best, rejectionHistogram }
+              }
             }
           }
         }
@@ -605,7 +613,7 @@ export class BinPacking3D {
         return { ok: false, reason: 'fragility' }
       }
 
-      const projectedTopLoadKg = this.calculateCurrentTopLoad(supporterId) + item.weight
+      const projectedTopLoadKg = (this.topLoadByPlacedIndex[supporterId] ?? 0) + item.weight
       if (projectedTopLoadKg > supporter.handlingRules.maxTopLoadKg) {
         return { ok: false, reason: 'top_load' }
       }
@@ -625,35 +633,21 @@ export class BinPacking3D {
     }
   }
 
-  private calculateCurrentTopLoad(supporterId: number): number {
-    let total = 0
-    for (let i = 0; i < this.placedItems.length; i++) {
-      if (i === supporterId) continue
-      if (this.isIndirectlySupportedBy(i, supporterId)) {
-        total += Number(this.placedItems[i]?.weight ?? 0)
-      }
-    }
-    return total
-  }
+  private propagateTopLoadToSupporters(initialSupporters: number[], addedWeight: number) {
+    if (addedWeight <= 0 || initialSupporters.length === 0) return
 
-  private isIndirectlySupportedBy(itemIndex: number, supporterId: number): boolean {
     const visited = new Set<number>()
-    const stack = [itemIndex]
+    const queue = [...initialSupporters]
 
-    while (stack.length > 0) {
-      const current = stack.pop()
-      if (current === undefined || visited.has(current)) continue
-      visited.add(current)
+    while (queue.length > 0) {
+      const supporterId = queue.pop()
+      if (supporterId === undefined || supporterId < 0 || visited.has(supporterId)) continue
+      visited.add(supporterId)
 
-      const supporters = this.placedItems[current]?.supporterIds ?? []
-      if (supporters.includes(supporterId)) return true
-
-      for (const s of supporters) {
-        if (!visited.has(s)) stack.push(s)
-      }
+      this.topLoadByPlacedIndex[supporterId] = (this.topLoadByPlacedIndex[supporterId] ?? 0) + addedWeight
+      const parentSupporters = this.placedItems[supporterId]?.supporterIds ?? []
+      for (const parentId of parentSupporters) queue.push(parentId)
     }
-
-    return false
   }
 
   private getRotations(item: BinPackingItem): RotationVariant[] {
@@ -1344,6 +1338,42 @@ function buildTuningVariant(rng: () => number): Partial<BinPackingSearchTuning> 
   }
 }
 
+function resolveIntelligentIterations(products: OptimizeLoadInputItem[], vehicle: Vehicle) {
+  let requestedItems = 0
+  let totalWeight = 0
+  let totalVolume = 0
+
+  for (const entry of products) {
+    const qty = Math.max(0, Math.floor(Number(entry.quantity ?? 0)))
+    if (qty <= 0) continue
+
+    const itemWeight = Math.max(0, Number(entry.product.weight ?? 0))
+    const itemVolume =
+      Math.max(0, Number(entry.product.length ?? 0)) *
+      Math.max(0, Number(entry.product.width ?? 0)) *
+      Math.max(0, Number(entry.product.height ?? 0))
+
+    requestedItems += qty
+    totalWeight += itemWeight * qty
+    totalVolume += itemVolume * qty
+  }
+
+  if (requestedItems <= 0) return 4
+
+  const vehicleVolume =
+    Math.max(1, Number(vehicle.internalLength ?? 0)) *
+    Math.max(1, Number(vehicle.internalWidth ?? 0)) *
+    Math.max(1, Number(vehicle.internalHeight ?? 0))
+  const weightRatio = Number(vehicle.maxWeight ?? 0) > 0 ? totalWeight / Number(vehicle.maxWeight) : 0
+  const volumeRatio = totalVolume / vehicleVolume
+  const avgItemWeight = totalWeight / requestedItems
+
+  const isLargeOptimization =
+    requestedItems >= 28 || weightRatio >= 0.58 || volumeRatio >= 0.62 || avgItemWeight >= 350
+
+  return isLargeOptimization ? 4 : 6
+}
+
 export async function optimizeLoad(
   products: OptimizeLoadInputItem[],
   vehicle: Vehicle,
@@ -1367,7 +1397,10 @@ export async function optimizeLoad(
     }
   }
 
-  const iterations = clamp(Math.floor(options.iterations ?? 14), 2, 40)
+  const iterations =
+    options.iterations === undefined
+      ? resolveIntelligentIterations(products, vehicle)
+      : clamp(Math.floor(options.iterations), 2, 40)
   const rng = createDeterministicRng(Number(options.seed ?? 20260218))
 
   const baseline = runOptimizationCandidate(products, vehicle, DEFAULT_TUNING)

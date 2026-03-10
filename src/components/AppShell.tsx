@@ -27,6 +27,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname])
 
   const [companyName, setCompanyName] = useState<string>('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const saved = window.localStorage.getItem('ll.sidebarCollapsed')
+    if (saved === '1') setSidebarCollapsed(true)
+  }, [])
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('ll.sidebarCollapsed', next ? '1' : '0')
+      }
+      return next
+    })
+  }
 
   useEffect(() => {
     // Si es ruta pública, no forzamos sesión
@@ -78,7 +95,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         onLogout={() => signOut({ callbackUrl: '/login' })}
       />
       <div className="flex flex-1">
-        <Sidebar userRole={userRole} />
+        <Sidebar
+          userRole={userRole}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
+        />
         <main className="flex-1 bg-gray-50 overflow-auto">{children}</main>
       </div>
     </div>
