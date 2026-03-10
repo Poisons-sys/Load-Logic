@@ -11,7 +11,30 @@ import {
   vehicles,
 } from '@/db/schema'
 import { requireAuth } from '@/lib/auth-server'
+import { optimizeLoad } from '@/lib/optimization'
 import { updateLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
+
+type NullsToUndefined<T> = {
+  [K in keyof T]:
+    T[K] extends null ? undefined :
+    T[K] extends (infer U | null) ? U | undefined :
+    T[K]
+}
+
+function nullsToUndefined<T extends Record<string, unknown>>(obj: T): NullsToUndefined<T> {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [k, v === null ? undefined : v])
+  ) as NullsToUndefined<T>
+}
+
+function toNum(v: unknown, def = 0) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : def
+}
+
+function resolveStoredStrategy(raw: unknown): 'baseline' | 'intelligent' {
+  return raw === 'baseline' || raw === 'intelligent' ? raw : 'intelligent'
+}
 
 // GET - Obtener plan de carga por ID
 export async function GET(
@@ -104,6 +127,9 @@ export async function PUT(
     const hasVehicleChange = Boolean(vehicleId) && vehicleId !== existingLoadPlan.vehicleId
     const hasStructuralChange = hasItemsChange || hasVehicleChange
     const nextStatus = hasStructuralChange ? 'pendiente' : (status || existingLoadPlan.status)
+    const previousStrategy = resolveStoredStrategy(
+      (existingLoadPlan.advancedMetrics as any)?.ai?.strategy
+    )
 
     if (!targetVehicleId) {
       return NextResponse.json(
@@ -215,6 +241,154 @@ export async function PUT(
         .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
     })
 
+    if (hasStructuralChange) {
+      try {
+        const reloadedPlan = await db.query.loadPlans.findFirst({
+          where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
+          with: {
+            vehicle: true,
+            items: {
+              with: {
+                product: true,
+              },
+            },
+          },
+        })
+
+        if (reloadedPlan?.vehicle) {
+          type ProductsForOptimization = Parameters<typeof optimizeLoad>[0]
+          type AlgoProduct = ProductsForOptimization[number]['product']
+          type AlgoVehicle = Parameters<typeof optimizeLoad>[1]
+
+          const productsForOptimization: ProductsForOptimization = []
+          for (const item of reloadedPlan.items) {
+            if (!item.product) continue
+            const normalizedProduct = nullsToUndefined(item.product)
+            productsForOptimization.push({
+              product: {
+                ...(normalizedProduct as unknown as AlgoProduct),
+                hsCode: normalizedProduct.hsCode ?? undefined,
+                description: normalizedProduct.description ?? '',
+                subcategory: normalizedProduct.subcategory ?? 'Sin subcategoria',
+              },
+              quantity: Number(item.quantity ?? 0),
+              routeStop: Number((item as any).routeStop ?? 1),
+            })
+          }
+
+          const normalizedVehicle = nullsToUndefined(reloadedPlan.vehicle)
+          const vehicleForOptimization: AlgoVehicle = {
+            ...(normalizedVehicle as unknown as AlgoVehicle),
+            internalLength: toNum(normalizedVehicle.internalLength, 0),
+            internalWidth: toNum(normalizedVehicle.internalWidth, 0),
+            internalHeight: toNum(normalizedVehicle.internalHeight, 0),
+            maxWeight: toNum(normalizedVehicle.maxWeight, 0),
+          }
+
+          if (productsForOptimization.length > 0) {
+            const optimizationResult = await optimizeLoad(
+              productsForOptimization,
+              vehicleForOptimization,
+              { strategy: previousStrategy }
+            )
+
+            await db.transaction(async (tx) => {
+              await tx.delete(loadPlanPlacements).where(eq(loadPlanPlacements.loadPlanId, id))
+              await tx.delete(loadingInstructions).where(eq(loadingInstructions.loadPlanId, id))
+
+              const itemByProductId = new Map<string, (typeof reloadedPlan.items)[number]>()
+              for (const item of reloadedPlan.items) {
+                if (!item.productId) continue
+                itemByProductId.set(String(item.productId), item)
+              }
+              const pieceIndexByProductId = new Map<string, number>()
+
+              if (optimizationResult.placedItems.length > 0) {
+                await tx.insert(loadPlanPlacements).values(
+                  optimizationResult.placedItems.map((placedItem, index) => {
+                    const productId = String(placedItem.product.id)
+                    const loadItem = itemByProductId.get(productId)
+                    const nextPieceIndex = (pieceIndexByProductId.get(productId) ?? -1) + 1
+                    pieceIndexByProductId.set(productId, nextPieceIndex)
+
+                    return {
+                      loadPlanId: id,
+                      itemId: loadItem?.id ?? null,
+                      productId,
+                      pieceIndex: nextPieceIndex,
+                      instanceKey: String((placedItem as any).instanceId ?? `${productId}-${index + 1}`),
+                      positionX: Number(placedItem.position.x ?? 0),
+                      positionY: Number(placedItem.position.y ?? 0),
+                      positionZ: Number(placedItem.position.z ?? 0),
+                      rotationX: Number(placedItem.rotation.x ?? 0),
+                      rotationY: Number(placedItem.rotation.y ?? 0),
+                      rotationZ: Number(placedItem.rotation.z ?? 0),
+                      loadingOrder: index + 1,
+                    }
+                  })
+                )
+              }
+
+              if (optimizationResult.instructions.length > 0) {
+                await tx.insert(loadingInstructions).values(
+                  optimizationResult.instructions.map((instruction) => {
+                    return {
+                      loadPlanId: id,
+                      step: Number(instruction.step ?? 0),
+                      description: String(instruction.description ?? ''),
+                      itemId: null,
+                      position: {
+                        x: Number(instruction.position.x ?? 0),
+                        y: Number(instruction.position.y ?? 0),
+                        z: Number(instruction.position.z ?? 0),
+                        rotation: { x: 0, y: 0, z: 0 },
+                        loadingZone: instruction.loadingZone,
+                        routeStop: Number(instruction.routeStop ?? 1),
+                        product: {
+                          id: String(instruction.instanceId ?? instruction.productName),
+                          name: instruction.productName,
+                        },
+                      },
+                      orientation: String(instruction.loadingZone ?? ''),
+                      specialNotes: null,
+                    }
+                  })
+                )
+              }
+
+              await tx
+                .update(loadPlans)
+                .set({
+                  status: 'optimizado',
+                  totalWeight: optimizationResult.totalWeight,
+                  spaceUtilization: optimizationResult.utilization,
+                  weightDistribution: optimizationResult.weightDistribution,
+                  advancedMetrics: {
+                    axleDistribution: optimizationResult.axleDistribution,
+                    centerOfGravity: optimizationResult.centerOfGravity,
+                    stability: optimizationResult.stability,
+                    heatmap: optimizationResult.heatmap,
+                    validations: optimizationResult.validations,
+                    kpis: optimizationResult.kpis,
+                    ai: optimizationResult.ai ?? null,
+                    unplacedItems: optimizationResult.unplacedItems,
+                    requestedItemsCount: optimizationResult.requestedItemsCount,
+                    placedItemsCount: optimizationResult.placedItemsCount,
+                    unplacedItemsCount: optimizationResult.unplacedItems.length,
+                  },
+                  optimizationScore: optimizationResult.kpis.overallScore,
+                  layoutVersion: Math.max(1, Number(existingLoadPlan.layoutVersion ?? 1) + 1),
+                  updatedAt: new Date(),
+                })
+                .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))
+            })
+          }
+        }
+      } catch (reoptimizeError) {
+        console.error('Error reoptimizando plan tras edicion:', reoptimizeError)
+      }
+    }
+
     const completeLoadPlan = await db.query.loadPlans.findFirst({
       where: and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)),
       with: {
@@ -240,7 +414,9 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
-      message: 'Plan de carga actualizado exitosamente',
+      message: hasStructuralChange
+        ? 'Plan de carga actualizado y reoptimizado exitosamente'
+        : 'Plan de carga actualizado exitosamente',
       data: completeLoadPlan,
     })
   } catch (error) {

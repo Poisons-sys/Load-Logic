@@ -190,7 +190,7 @@ export default function EditLoadPlanPage() {
       }
 
       setSuccess(
-        'Plan actualizado. Se reinicio la optimizacion para que vuelvas a correr el acomodo con la nueva configuracion.'
+        'Plan actualizado y reoptimizado con la nueva configuracion.'
       )
       setTimeout(() => {
         router.push(`/load-plans/${planId}/view`)
