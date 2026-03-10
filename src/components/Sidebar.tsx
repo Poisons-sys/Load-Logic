@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -28,7 +29,7 @@ interface SidebarProps {
 interface NavItem {
   name: string
   href: string
-  icon: React.ElementType
+  icon: LucideIcon
   roles: string[]
 }
 
@@ -102,7 +103,7 @@ export default function Sidebar({
       <div className={cn('border-t border-gray-800', collapsed ? 'p-2' : 'p-4')}>
         <div className={cn('text-xs text-gray-400', collapsed && 'text-center')}>
           {!collapsed && <p>Load Logic v1.0</p>}
-          <p className={cn(!collapsed && 'mt-1')}>© 2026</p>
+          <p className={cn(!collapsed && 'mt-1')}>(c) 2026</p>
         </div>
       </div>
     </aside>
