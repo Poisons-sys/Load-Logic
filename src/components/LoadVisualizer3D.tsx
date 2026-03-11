@@ -226,6 +226,10 @@ function findStackY(candidate: Cube3DData, others: Cube3DData[], container: Cont
     const overlapZ = !(candMax.z <= ob.min.z || candMin.z >= ob.max.z);
     if (!overlapX || !overlapZ) continue;
 
+    // Only treat boxes below (or touching) as supports.
+    // Ignoring boxes above avoids artificial vertical gaps.
+    if (ob.max.y > candMin.y + 0.01) continue;
+
     const topY = o.y + o.height;
     bestTopY = Math.max(bestTopY, topY);
   }

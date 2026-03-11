@@ -173,6 +173,13 @@ type ManualIssuePresentation = {
   actions: string[]
 }
 
+type OptimizationValidationPresentation = {
+  title: string
+  explanation: string
+  details: string[]
+  actions: string[]
+}
+
 type ManualLayoutValidation = {
   outOfBounds: number
   collisions: number
@@ -431,6 +438,96 @@ function presentManualIssue(issue: ManualLayoutIssue, validation: ManualLayoutVa
     explanation: issue.message,
     details: [],
     actions: ['Revisar manualmente esta validacion antes de guardar el plan.'],
+  }
+}
+
+function fmtPct(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toFixed(1)}%` : '-'
+}
+
+function presentOptimizationValidation(
+  validation: OptimizationResult['validations'][number]
+): OptimizationValidationPresentation {
+  const details = validation.details ?? {}
+
+  if (validation.code === 'AXLE_PROFILE_IMBALANCE') {
+    const range = details.expectedFrontPctRange as { min?: number; max?: number } | undefined
+    return {
+      title: 'Desbalance entre ejes',
+      explanation: 'El porcentaje frontal de peso esta fuera del rango recomendado para la unidad.',
+      details: [
+        `Perfil: ${String(details.profile ?? 'actual')}`,
+        `Frontal actual: ${fmtPct(details.frontPct)}`,
+        `Rango esperado: ${fmtPct(range?.min)} - ${fmtPct(range?.max)}`,
+      ],
+      actions: [
+        'Mover piezas pesadas hacia el centro o parte trasera.',
+        'Evitar concentrar peso en la zona frontal.',
+      ],
+    }
+  }
+
+  if (validation.code === 'LENGTH_IMBALANCE') {
+    return {
+      title: 'Desbalance longitudinal',
+      explanation: 'La distribucion de peso a lo largo de la unidad no esta equilibrada.',
+      details: [
+        `Frente: ${fmtPct(details.front)}`,
+        `Centro: ${fmtPct(details.center)}`,
+        `Trasera: ${fmtPct(details.rear)}`,
+      ],
+      actions: [
+        'Repartir mejor el peso entre frente, centro y trasera.',
+        'Movern piezas pesadas desde la zona saturada hacia otras zonas.',
+      ],
+    }
+  }
+
+  if (validation.code === 'AXLE_OVERLOAD') {
+    return {
+      title: 'Exceso por ejes',
+      explanation: 'La carga excede el limite permitido en uno o ambos ejes.',
+      details: [
+        `Exceso frontal: ${Number(details.frontOverKg ?? 0).toFixed(1)} kg`,
+        `Exceso trasero: ${Number(details.rearOverKg ?? 0).toFixed(1)} kg`,
+      ],
+      actions: [
+        'Reubicar peso fuera del eje saturado.',
+        'Distribuir carga para volver a rango permitido.',
+      ],
+    }
+  }
+
+  if (validation.code === 'STABILITY_RISK') {
+    return {
+      title: 'Riesgo de estabilidad',
+      explanation: 'El centro de gravedad necesita ajuste para operar con seguridad.',
+      details: [],
+      actions: [
+        'Bajar piezas altas y acercar peso al piso.',
+        'Balancear mejor carga lateral y longitudinalmente.',
+      ],
+    }
+  }
+
+  if (validation.code === 'NOT_ALL_ITEMS_PLACED') {
+    return {
+      title: 'Piezas sin acomodar',
+      explanation: validation.message,
+      details: [`No colocadas: ${Number(details.unplaced ?? 0)}`],
+      actions: [
+        'Revisar prioridades de carga o cambiar de unidad.',
+        'Intentar estrategia inteligente o editar manualmente.',
+      ],
+    }
+  }
+
+  return {
+    title: validation.code,
+    explanation: validation.message,
+    details: Object.entries(details).map(([k, v]) => `${k}: ${String(v)}`),
+    actions: ['Revisar esta validacion antes de guardar el plan.'],
   }
 }
 
@@ -1731,25 +1828,51 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
                       <div className="rounded-lg border p-4">
                         <p className="font-semibold mb-2">Validaciones</p>
                         <div className="space-y-2 max-h-40 overflow-y-auto">
-                          {optimizationResult.validations.map((v) => (
-                            <p
-                              key={`${v.code}-${v.message}`}
-                              className={`text-sm ${
-                                v.severity === 'critical'
-                                  ? 'text-red-700'
-                                  : v.severity === 'warning'
-                                    ? 'text-amber-700'
-                                    : 'text-emerald-700'
-                              }`}
-                            >
-                              [{v.code}] {v.message}
-                            </p>
-                          ))}
+                          {optimizationResult.validations.map((v) => {
+                            const p = presentOptimizationValidation(v)
+                            const palette =
+                              v.severity === 'critical'
+                                ? 'border-red-200 bg-red-50 text-red-900'
+                                : v.severity === 'warning'
+                                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                            return (
+                              <div key={`${v.code}-${v.message}`} className={`rounded border p-3 text-sm ${palette}`}>
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="font-medium">{p.title}</p>
+                                  <span className="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                    {v.severity}
+                                  </span>
+                                </div>
+                                <p className="mt-1">{p.explanation}</p>
+                                {p.details.length > 0 && (
+                                  <div className="mt-2">
+                                    <p className="font-semibold">Datos clave</p>
+                                    <ul className="list-disc pl-4">
+                                      {p.details.map((line) => (
+                                        <li key={`${v.code}-detail-${line}`}>{line}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {p.actions.length > 0 && (
+                                  <div className="mt-2">
+                                    <p className="font-semibold">Accion sugerida</p>
+                                    <ul className="list-disc pl-4">
+                                      {p.actions.map((line) => (
+                                        <li key={`${v.code}-action-${line}`}>{line}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       </div>
 
                       <div className="rounded-lg border p-4">
-                        <p className="font-semibold mb-2">Heatmap de OcupaciÃ³n (piso)</p>
+                        <p className="font-semibold mb-2">Heatmap de Ocupación (piso)</p>
                         <div className="space-y-2">
                           <p className="text-xs text-gray-500">
                             Celdas ocupadas: {optimizationResult.heatmap.occupiedCells} / {optimizationResult.heatmap.occupiedCells + optimizationResult.heatmap.freeCells}

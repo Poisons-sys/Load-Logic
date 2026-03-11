@@ -989,6 +989,86 @@ function computeSequenceScore(placedItems: PlacedItem[]): { score: number; viola
   }
 }
 
+function overlap1D(aStart: number, aEnd: number, bStart: number, bEnd: number) {
+  return aStart < bEnd - 0.01 && aEnd > bStart + 0.01
+}
+
+function overlapsXZ(a: PlacedItem, b: PlacedItem) {
+  const aX1 = a.position.x
+  const aX2 = a.position.x + a.placedDims.w
+  const aZ1 = a.position.z
+  const aZ2 = a.position.z + a.placedDims.d
+
+  const bX1 = b.position.x
+  const bX2 = b.position.x + b.placedDims.w
+  const bZ1 = b.position.z
+  const bZ2 = b.position.z + b.placedDims.d
+
+  return overlap1D(aX1, aX2, bX1, bX2) && overlap1D(aZ1, aZ2, bZ1, bZ2)
+}
+
+function settlePlacedItems(placedItems: PlacedItem[]) {
+  const sorted = [...placedItems].sort((a, b) => {
+    if (a.position.y !== b.position.y) return a.position.y - b.position.y
+    if (a.position.z !== b.position.z) return a.position.z - b.position.z
+    return a.position.x - b.position.x
+  })
+
+  const settled: PlacedItem[] = []
+  const idToSettledIndex = new Map<string, number>()
+
+  for (const item of sorted) {
+    let supportTop = 0
+    const supporterIndexes: number[] = []
+
+    for (let i = 0; i < settled.length; i++) {
+      const base = settled[i]
+      if (!overlapsXZ(item, base)) continue
+      const top = base.position.y + base.placedDims.h
+      if (top > supportTop && top <= item.position.y + 10.01) {
+        supportTop = top
+      }
+    }
+
+    for (let i = 0; i < settled.length; i++) {
+      const base = settled[i]
+      if (!overlapsXZ(item, base)) continue
+      const top = base.position.y + base.placedDims.h
+      if (Math.abs(top - supportTop) <= 1.01) {
+        const idx = idToSettledIndex.get(base.id)
+        if (idx !== undefined) supporterIndexes.push(idx)
+      }
+    }
+
+    const nextY = supportTop <= item.position.y + 10.01 ? supportTop : item.position.y
+    const nextStackLevel =
+      supporterIndexes.length === 0
+        ? 1
+        : Math.max(
+            1,
+            ...supporterIndexes.map((idx) => {
+              const s = settled[idx]
+              return (s?.stackLevel ?? 1) + 1
+            })
+          )
+
+    const next: PlacedItem = {
+      ...item,
+      position: {
+        ...item.position,
+        y: round2(nextY),
+      },
+      supporterIds: supporterIndexes,
+      stackLevel: nextStackLevel,
+    }
+
+    idToSettledIndex.set(next.id, settled.length)
+    settled.push(next)
+  }
+
+  return settled
+}
+
 function computeKpis(
   utilization: number,
   weightDistribution: { front: number; center: number; rear: number },
@@ -1213,7 +1293,11 @@ function runOptimizationCandidate(
     }
   }
 
-  const result = binPacker.optimize()
+  const rawResult = binPacker.optimize()
+  const result: OptimizationCoreResult = {
+    ...rawResult,
+    placedItems: settlePlacedItems(rawResult.placedItems),
+  }
   const { totalWeight, weightDistribution } = computeWeightDistribution(
     result.placedItems,
     Number(vehicle.internalLength ?? 0)
