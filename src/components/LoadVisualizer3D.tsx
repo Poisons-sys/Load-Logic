@@ -1072,8 +1072,12 @@ export default function LoadVisualizer3D({
         rotY: normRotY((selected.rotY ?? 0) + Math.PI / 2),
       };
       const rotated = normalizeManualPlacement(rotatedRaw);
+      const rotatedSettled = clampCubeInsideContainer(
+        { ...rotated, y: snap(findStackY(rotated, others, container), snapStep) },
+        container
+      );
 
-      if (!collidesWithOthers(rotated, others)) return rotated;
+      if (!collidesWithOthers(rotatedSettled, others)) return rotatedSettled;
 
       const stacked = clampCubeInsideContainer(
         { ...rotated, y: snap(findStackY(rotated, others, container)) },
@@ -1200,13 +1204,10 @@ export default function LoadVisualizer3D({
       }
 
       const others = prev.filter((c) => c.id !== safe.id);
+      // Always settle the moved box on the nearest valid support (or floor).
+      // This avoids floating gaps that later become "unsupported stack" issues.
       const stackedY = snap(findStackY(safe, others, container), snapStep);
-      const settleTolerance = Math.max(2, snapStep * 5);
-      const shouldSettle =
-        safe.y <= stackedY + settleTolerance && safe.y >= stackedY - settleTolerance;
-      const settled = shouldSettle
-        ? normalizeManualPlacement({ ...safe, y: stackedY })
-        : safe;
+      const settled = normalizeManualPlacement({ ...safe, y: stackedY });
 
       const resolved = reflowAfterMove(moving, settled, others);
       if (!resolved) {
