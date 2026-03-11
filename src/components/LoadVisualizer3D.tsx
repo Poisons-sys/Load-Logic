@@ -48,6 +48,8 @@ type Props = {
   totalWeightKg?: number;
   totalVolumeM3?: number;
   utilizationPercent?: number;
+  focusCubeIds?: string[];
+  focusToken?: string | number | null;
   onCubeClick?: (cube: Cube3DData) => void;
   onCubesChange?: (cubes: Cube3DData[]) => void;
   onEditStatsChange?: (stats: LayoutEditStats) => void;
@@ -611,6 +613,8 @@ export default function LoadVisualizer3D({
   totalWeightKg,
   totalVolumeM3,
   utilizationPercent,
+  focusCubeIds,
+  focusToken,
   onCubeClick,
   onCubesChange,
   onEditStatsChange,
@@ -629,6 +633,7 @@ export default function LoadVisualizer3D({
   const [redoCount, setRedoCount] = useState(0);
   const [snapStep, setSnapStep] = useState(1);
   const [visibleMaxY, setVisibleMaxY] = useState<number>(container.height);
+  const focusAnimRafRef = useRef<number | null>(null);
   const [editStats, setEditStats] = useState<LayoutEditStats>({
     moves: 0,
     swaps: 0,
@@ -639,6 +644,13 @@ export default function LoadVisualizer3D({
     updatedAt: 0,
   });
   const shouldEmitChangesRef = useRef(false);
+
+  const stopFocusAnimation = useCallback(() => {
+    if (focusAnimRafRef.current !== null) {
+      cancelAnimationFrame(focusAnimRafRef.current);
+      focusAnimRafRef.current = null;
+    }
+  }, []);
 
   const syncHistoryCounts = useCallback(() => {
     setUndoCount(undoStackRef.current.length);
@@ -677,6 +689,99 @@ export default function LoadVisualizer3D({
   useEffect(() => {
     setVisibleMaxY(container.height);
   }, [container.height]);
+
+  useEffect(() => {
+    if (editMode) return;
+    if (!focusCubeIds || focusCubeIds.length === 0) return;
+    const controls = orbitRef.current;
+    if (!controls?.object) return;
+
+    const idSet = new Set(focusCubeIds.map(String));
+    const focused = items.filter((cube) => idSet.has(String(cube.id)));
+    if (focused.length === 0) return;
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+
+    for (const cube of focused) {
+      const fp = effectiveFootprint(cube);
+      minX = Math.min(minX, cube.x);
+      minY = Math.min(minY, cube.y);
+      minZ = Math.min(minZ, cube.z);
+      maxX = Math.max(maxX, cube.x + fp.d);
+      maxY = Math.max(maxY, cube.y + cube.height);
+      maxZ = Math.max(maxZ, cube.z + fp.w);
+    }
+
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const spanZ = Math.max(1, maxZ - minZ);
+    const radius = Math.max(spanX, spanY, spanZ) / 2;
+
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+
+    const target = new THREE.Vector3(
+      centerZ - container.width / 2,
+      centerY,
+      centerX - container.depth / 2
+    );
+
+    const camera = controls.object as THREE.Camera;
+    const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+    if (dir.lengthSq() < 0.0001) dir.set(1, 0.6, 1);
+    dir.normalize();
+
+    const minDist = Math.max(container.width, container.depth) * 0.35;
+    const maxDist = Math.max(container.width, container.depth) * 6;
+    const distance = clamp(radius * 2.4, minDist, maxDist);
+
+    const nextPos = target.clone().addScaledVector(dir, distance);
+    nextPos.y = clamp(nextPos.y, Math.max(20, container.height * 0.25), container.height * 2);
+
+    const fromPos = camera.position.clone();
+    const fromTarget = controls.target.clone();
+    const toPos = nextPos.clone();
+    const toTarget = target.clone();
+
+    if (fromPos.distanceToSquared(toPos) < 0.0001 && fromTarget.distanceToSquared(toTarget) < 0.0001) {
+      controls.target.copy(toTarget);
+      camera.position.copy(toPos);
+      controls.update();
+      return;
+    }
+
+    stopFocusAnimation();
+    const durationMs = 420;
+    const start = performance.now();
+
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = t < 0.5 ? 2 * t * t : 1 - (Math.pow(-2 * t + 2, 2) / 2);
+      camera.position.lerpVectors(fromPos, toPos, eased);
+      controls.target.lerpVectors(fromTarget, toTarget, eased);
+      controls.update();
+
+      if (t < 1) {
+        focusAnimRafRef.current = requestAnimationFrame(step);
+      } else {
+        focusAnimRafRef.current = null;
+      }
+    };
+
+    focusAnimRafRef.current = requestAnimationFrame(step);
+  }, [items, container, focusToken, focusCubeIds, editMode, stopFocusAnimation]);
+
+  useEffect(() => {
+    return () => {
+      stopFocusAnimation();
+    };
+  }, [stopFocusAnimation]);
 
   // If cubes already include calculated coordinates, preserve them.
   // Otherwise, fallback to auto-packing rows.
@@ -765,6 +870,7 @@ export default function LoadVisualizer3D({
   }, [container.width, container.height, container.depth]);
 
   const resetView = () => {
+    stopFocusAnimation();
     const m = Math.max(container.width, container.height, container.depth);
     if (orbitRef.current) {
       orbitRef.current.target.set(0, container.height / 2, 0);

@@ -96,6 +96,28 @@ type LoadPlan = {
   instructions?: PlanInstruction[]
 }
 
+type PlanValidation = {
+  code: string
+  severity: 'info' | 'warning' | 'critical'
+  message: string
+  details?: Record<string, unknown>
+}
+
+type WarningPresentation = {
+  title: string
+  explanation: string
+  details: string[]
+  actions: string[]
+}
+
+type DispatchGate = {
+  status: 'block' | 'review'
+  label: string
+  reason: string
+}
+
+type LoadZone = 'front' | 'center' | 'rear'
+
 function getCategoryColor(category: string): string {
   const colors: Record<string, string> = {
     automotriz: '#3B82F6',
@@ -121,6 +143,209 @@ function toNum(value: unknown, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
+function formatPct(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toFixed(1)}%` : '-'
+}
+
+function formatRange(range: unknown) {
+  if (!range || typeof range !== 'object') return '-'
+  const r = range as Record<string, unknown>
+  return `${formatPct(r.min)} - ${formatPct(r.max)}`
+}
+
+function formatStabilityLevel(level: unknown) {
+  const v = String(level ?? '').toLowerCase()
+  if (v === 'stable') return 'estable'
+  if (v === 'caution') return 'precaucion'
+  if (v === 'critical') return 'critico'
+  return '-'
+}
+
+function formatScore(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n.toFixed(1) : '-'
+}
+
+function toZoneByX(x: number, containerDepth: number): LoadZone {
+  const third = containerDepth / 3
+  if (x < third) return 'front'
+  if (x < third * 2) return 'center'
+  return 'rear'
+}
+
+function preferredZoneFromImbalance(details?: Record<string, unknown>): LoadZone {
+  const front = Number(details?.frontPct ?? details?.front ?? 0)
+  const rear = Number(details?.rearPct ?? details?.rear ?? 0)
+  const center = Number(details?.center ?? 0)
+
+  if (front >= rear && front >= center) return 'front'
+  if (rear >= front && rear >= center) return 'rear'
+  return 'center'
+}
+
+function presentWarning(issue: PlanValidation): WarningPresentation {
+  const details = issue.details ?? {}
+  const profile = String(details.profile ?? '')
+  const frontPct = details.frontPct
+  const expectedRange = details.expectedFrontPctRange
+  const cog = details.cog && typeof details.cog === 'object'
+    ? (details.cog as Record<string, unknown>)
+    : null
+  const stability = details.stability && typeof details.stability === 'object'
+    ? (details.stability as Record<string, unknown>)
+    : null
+
+  if (issue.code === 'AXLE_PROFILE_IMBALANCE') {
+    return {
+      title: 'Desbalance entre ejes',
+      explanation: `El peso frontal esta fuera del rango recomendado para el perfil ${profile || 'actual'}.`,
+      details: [
+        `Frente actual: ${formatPct(frontPct)}`,
+        `Rango esperado: ${formatRange(expectedRange)}`,
+      ],
+      actions: [
+        'Mover parte de la carga hacia el centro o la parte trasera.',
+        'Revisar productos pesados en las primeras posiciones de carga.',
+      ],
+    }
+  }
+
+  if (issue.code === 'STABILITY_RISK') {
+    return {
+      title: 'Riesgo de estabilidad',
+      explanation: 'El centro de gravedad y/o la estabilidad general requieren ajuste antes de operar.',
+      details: [
+        `Zona de centro de gravedad: ${String(cog?.zone ?? '-')}`,
+        `Nivel de estabilidad: ${formatStabilityLevel(stability?.level)}`,
+        `Score de estabilidad: ${formatScore(stability?.score)}`,
+      ],
+      actions: [
+        'Bajar peso de niveles altos y acercarlo al piso del remolque.',
+        'Distribuir mejor la carga entre frente, centro y parte trasera.',
+      ],
+    }
+  }
+
+  if (issue.code === 'LENGTH_IMBALANCE') {
+    return {
+      title: 'Desbalance longitudinal',
+      explanation: 'La carga esta concentrada en una zona del remolque y puede afectar manejo/frenado.',
+      details: [
+        `Frente: ${formatPct(details.front)}`,
+        `Centro: ${formatPct(details.center)}`,
+        `Trasera: ${formatPct(details.rear)}`,
+      ],
+      actions: [
+        'Reubicar piezas pesadas para acercarse a una distribucion mas pareja.',
+        'Evitar que todo el peso quede en el frente del remolque.',
+      ],
+    }
+  }
+
+  if (issue.code === 'NOT_ALL_ITEMS_PLACED') {
+    return {
+      title: 'Piezas sin acomodar',
+      explanation: issue.message,
+      details: [],
+      actions: ['Ajustar prioridades, rotaciones o seleccionar una unidad con mayor capacidad.'],
+    }
+  }
+
+  return {
+    title: issue.code,
+    explanation: issue.message,
+    details: Object.entries(details).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`),
+    actions: ['Revisar este warning con el supervisor de carga antes de liberar la unidad.'],
+  }
+}
+
+function dispatchGateForWarning(issue: PlanValidation): DispatchGate {
+  const details = issue.details ?? {}
+  const frontPct = Number(details.frontPct)
+  const rearPct = Number(details.rear)
+  const front = Number(details.front)
+  const cog = details.cog && typeof details.cog === 'object'
+    ? (details.cog as Record<string, unknown>)
+    : null
+  const stability = details.stability && typeof details.stability === 'object'
+    ? (details.stability as Record<string, unknown>)
+    : null
+  const expectedRange =
+    details.expectedFrontPctRange && typeof details.expectedFrontPctRange === 'object'
+      ? (details.expectedFrontPctRange as Record<string, unknown>)
+      : null
+  const expectedMax = Number(expectedRange?.max)
+  const expectedMin = Number(expectedRange?.min)
+
+  if (issue.code === 'STABILITY_RISK') {
+    const zone = String(cog?.zone ?? '').toLowerCase()
+    const level = String(stability?.level ?? '').toLowerCase()
+    if (zone === 'critical' || level === 'critical') {
+      return {
+        status: 'block',
+        label: 'Bloquea despacho',
+        reason: 'Riesgo de estabilidad en nivel critico.',
+      }
+    }
+    return {
+      status: 'review',
+      label: 'Revisar antes de salir',
+      reason: 'Estabilidad fuera de zona estable.',
+    }
+  }
+
+  if (issue.code === 'AXLE_PROFILE_IMBALANCE') {
+    if (
+      Number.isFinite(frontPct) &&
+      ((Number.isFinite(expectedMax) && frontPct > expectedMax + 15) ||
+        (Number.isFinite(expectedMin) && frontPct < expectedMin - 15))
+    ) {
+      return {
+        status: 'block',
+        label: 'Bloquea despacho',
+        reason: 'Desbalance de ejes severo respecto al perfil objetivo.',
+      }
+    }
+    return {
+      status: 'review',
+      label: 'Revisar antes de salir',
+      reason: 'Distribucion por ejes fuera de rango recomendado.',
+    }
+  }
+
+  if (issue.code === 'LENGTH_IMBALANCE') {
+    const frontHeavy = Number.isFinite(front) && front >= 70
+    const rearHeavy = Number.isFinite(rearPct) && rearPct >= 70
+    if (frontHeavy || rearHeavy) {
+      return {
+        status: 'block',
+        label: 'Bloquea despacho',
+        reason: 'Concentracion longitudinal de peso demasiado alta en un extremo.',
+      }
+    }
+    return {
+      status: 'review',
+      label: 'Revisar antes de salir',
+      reason: 'Desbalance longitudinal moderado.',
+    }
+  }
+
+  if (issue.code === 'NOT_ALL_ITEMS_PLACED') {
+    return {
+      status: 'review',
+      label: 'Revisar antes de salir',
+      reason: 'No toda la carga solicitada fue acomodada.',
+    }
+  }
+
+  return {
+    status: 'review',
+    label: 'Revisar antes de salir',
+    reason: 'Warning operativo detectado.',
+  }
+}
+
 export default function LoadPlan3DViewPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
@@ -130,6 +355,7 @@ export default function LoadPlan3DViewPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null)
+  const [activeWarningHighlightKey, setActiveWarningHighlightKey] = useState<string | null>(null)
 
   const fetchPlan = useCallback(async () => {
     if (!planId) return
@@ -202,6 +428,55 @@ export default function LoadPlan3DViewPage() {
       aiImproved: Boolean(ai?.improved ?? false),
     }
   }, [plan])
+
+  const validationIssues = useMemo<PlanValidation[]>(() => {
+    const adv = (plan?.advancedMetrics ?? {}) as Record<string, unknown>
+    const raw = Array.isArray(adv.validations) ? adv.validations : []
+
+    return raw.map((item, idx) => {
+      const it = (item ?? {}) as Record<string, unknown>
+      const severityRaw = String(it.severity ?? 'info')
+      const severity: PlanValidation['severity'] =
+        severityRaw === 'critical' || severityRaw === 'warning' ? severityRaw : 'info'
+
+      return {
+        code: String(it.code ?? `VALIDATION_${idx + 1}`),
+        severity,
+        message: String(it.message ?? 'Validacion sin mensaje'),
+        details:
+          it.details && typeof it.details === 'object'
+            ? (it.details as Record<string, unknown>)
+            : undefined,
+      }
+    })
+  }, [plan])
+
+  const warningIssues = useMemo(
+    () => validationIssues.filter((issue) => issue.severity === 'warning'),
+    [validationIssues]
+  )
+
+  const warningCards = useMemo(
+    () =>
+      warningIssues.map((issue, idx) => ({
+        key: `${issue.code}-${idx}`,
+        issue,
+        presentation: presentWarning(issue),
+        gate: dispatchGateForWarning(issue),
+      })),
+    [warningIssues]
+  )
+
+  const warningGateSummary = useMemo(() => {
+    const blockCount = warningCards.filter((c) => c.gate.status === 'block').length
+    const reviewCount = warningCards.filter((c) => c.gate.status === 'review').length
+    return { blockCount, reviewCount }
+  }, [warningCards])
+
+  const activeWarningCard = useMemo(
+    () => warningCards.find((card) => card.key === activeWarningHighlightKey) ?? null,
+    [warningCards, activeWarningHighlightKey]
+  )
 
   const cubes = useMemo(() => {
     const fromPlacements = (plan?.placements ?? [])
@@ -318,6 +593,80 @@ export default function LoadPlan3DViewPage() {
 
     return out
   }, [plan, container])
+
+  const highlightResult = useMemo(() => {
+    if (!activeWarningCard || !container) {
+      return {
+        cubeIds: new Set<string>(),
+        description: '',
+      }
+    }
+
+    const issue = activeWarningCard.issue
+    const details = issue.details ?? {}
+
+    if (issue.code === 'NOT_ALL_ITEMS_PLACED') {
+      return {
+        cubeIds: new Set<string>(),
+        description: 'Este warning no apunta a cajas especificas en el layout.',
+      }
+    }
+
+    if (issue.code === 'STABILITY_RISK') {
+      const ids = new Set(
+        cubes
+          .filter((cube) => Number(cube.y ?? 0) >= container.height * 0.55)
+          .map((cube) => String(cube.id))
+      )
+      return {
+        cubeIds: ids,
+        description:
+          ids.size > 0
+            ? 'Resaltando cajas en niveles altos (mayor impacto en estabilidad).'
+            : 'No se detectaron cajas altas para resaltar.',
+      }
+    }
+
+    if (issue.code === 'AXLE_PROFILE_IMBALANCE' || issue.code === 'LENGTH_IMBALANCE') {
+      const zone = preferredZoneFromImbalance(details)
+      const ids = new Set(
+        cubes
+          .filter((cube) => toZoneByX(Number(cube.x ?? 0), container.depth) === zone)
+          .map((cube) => String(cube.id))
+      )
+      const zoneLabel = zone === 'front' ? 'frontal' : zone === 'rear' ? 'trasera' : 'central'
+      return {
+        cubeIds: ids,
+        description: `Resaltando zona ${zoneLabel}, donde se concentra mas peso.`,
+      }
+    }
+
+    return {
+      cubeIds: new Set(cubes.map((cube) => String(cube.id))),
+      description: 'Resaltando cajas relacionadas con el warning seleccionado.',
+    }
+  }, [activeWarningCard, container, cubes])
+
+  const visualizerCubes = useMemo(() => {
+    if (!activeWarningCard) return cubes
+    if (highlightResult.cubeIds.size === 0) {
+      return cubes.map((cube) => ({
+        ...cube,
+        color: '#94A3B8',
+      }))
+    }
+
+    return cubes.map((cube) => ({
+      ...cube,
+      color: highlightResult.cubeIds.has(String(cube.id)) ? '#F59E0B' : '#CBD5E1',
+    }))
+  }, [activeWarningCard, cubes, highlightResult.cubeIds])
+
+  useEffect(() => {
+    if (!activeWarningHighlightKey) return
+    const stillExists = warningCards.some((card) => card.key === activeWarningHighlightKey)
+    if (!stillExists) setActiveWarningHighlightKey(null)
+  }, [warningCards, activeWarningHighlightKey])
 
   const operationalSteps = useMemo(() => {
     const sorted = (plan?.instructions ?? [])
@@ -499,7 +848,17 @@ export default function LoadPlan3DViewPage() {
           <CardTitle>Visualizacion 3D</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <LoadVisualizer3D container={container} cubes={cubes} />
+          {activeWarningCard && (
+            <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+              Warning activo: {activeWarningCard.presentation.title}. {highlightResult.description}
+            </div>
+          )}
+          <LoadVisualizer3D
+            container={container}
+            cubes={visualizerCubes}
+            focusCubeIds={Array.from(highlightResult.cubeIds)}
+            focusToken={activeWarningHighlightKey}
+          />
         </CardContent>
       </Card>
 
@@ -596,6 +955,112 @@ export default function LoadPlan3DViewPage() {
               </p>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Warnings Detectados</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {warningIssues.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div className="rounded border border-red-200 bg-red-50 p-3">
+                <p className="text-red-700">Bloquea despacho</p>
+                <p className="font-semibold text-red-800">{warningGateSummary.blockCount}</p>
+              </div>
+              <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p className="text-amber-700">Revisar antes de salir</p>
+                <p className="font-semibold text-amber-800">{warningGateSummary.reviewCount}</p>
+              </div>
+            </div>
+          )}
+          {warningIssues.length === 0 && (
+            <p className="text-sm text-gray-500">No hay warnings activos en esta carga.</p>
+          )}
+          {warningCards.map(({ issue, presentation, gate }, idx) => (
+            <div
+              key={`${issue.code}-${idx}`}
+              className={
+                gate.status === 'block'
+                  ? 'rounded border border-red-200 bg-red-50 p-3'
+                  : 'rounded border border-amber-200 bg-amber-50 p-3'
+              }
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className={gate.status === 'block' ? 'font-medium text-red-900' : 'font-medium text-amber-900'}>
+                    {presentation.title}
+                  </p>
+                  <p className={gate.status === 'block' ? 'text-sm text-red-900' : 'text-sm text-amber-900'}>
+                    {presentation.explanation}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Badge
+                    variant="outline"
+                    className={
+                      gate.status === 'block'
+                        ? 'border-red-400 text-red-800'
+                        : 'border-amber-400 text-amber-800'
+                    }
+                  >
+                    warning
+                  </Badge>
+                  <Badge
+                    className={
+                      gate.status === 'block'
+                        ? 'bg-red-700 text-white hover:bg-red-700'
+                        : 'bg-amber-600 text-white hover:bg-amber-600'
+                    }
+                  >
+                    {gate.label}
+                  </Badge>
+                </div>
+              </div>
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const warningKey = `${issue.code}-${idx}`
+                    const isActive = activeWarningHighlightKey === warningKey
+                    setActiveWarningHighlightKey(isActive ? null : warningKey)
+                    document
+                      .querySelector('h1')
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                >
+                  {activeWarningHighlightKey === `${issue.code}-${idx}`
+                    ? 'Quitar resaltado'
+                    : 'Resaltar en 3D'}
+                </Button>
+              </div>
+              <p className={gate.status === 'block' ? 'mt-2 text-xs text-red-800' : 'mt-2 text-xs text-amber-800'}>
+                Motivo operativo: {gate.reason}
+              </p>
+              {presentation.details.length > 0 && (
+                <div className={gate.status === 'block' ? 'mt-2 text-xs text-red-800' : 'mt-2 text-xs text-amber-800'}>
+                  <p className="font-semibold">Datos del warning</p>
+                  <ul className="list-disc pl-4">
+                    {presentation.details.map((line) => (
+                      <li key={`${issue.code}-${line}`}>{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {presentation.actions.length > 0 && (
+                <div className={gate.status === 'block' ? 'mt-2 text-xs text-red-900' : 'mt-2 text-xs text-amber-900'}>
+                  <p className="font-semibold">Accion sugerida</p>
+                  <ul className="list-disc pl-4">
+                    {presentation.actions.map((action) => (
+                      <li key={`${issue.code}-${action}`}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ))}
         </CardContent>
       </Card>
 
