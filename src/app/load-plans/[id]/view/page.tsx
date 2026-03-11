@@ -478,7 +478,7 @@ export default function LoadPlan3DViewPage() {
     [warningCards, activeWarningHighlightKey]
   )
 
-  const cubes = useMemo(() => {
+  const planCubes = useMemo(() => {
     const fromPlacements = (plan?.placements ?? [])
       .slice()
       .sort((a, b) => Number(a.loadingOrder ?? 0) - Number(b.loadingOrder ?? 0))
@@ -594,6 +594,8 @@ export default function LoadPlan3DViewPage() {
     return out
   }, [plan, container])
 
+  const activeCubes = planCubes
+
   const highlightResult = useMemo(() => {
     if (!activeWarningCard || !container) {
       return {
@@ -614,7 +616,7 @@ export default function LoadPlan3DViewPage() {
 
     if (issue.code === 'STABILITY_RISK') {
       const ids = new Set(
-        cubes
+        activeCubes
           .filter((cube) => Number(cube.y ?? 0) >= container.height * 0.55)
           .map((cube) => String(cube.id))
       )
@@ -630,7 +632,7 @@ export default function LoadPlan3DViewPage() {
     if (issue.code === 'AXLE_PROFILE_IMBALANCE' || issue.code === 'LENGTH_IMBALANCE') {
       const zone = preferredZoneFromImbalance(details)
       const ids = new Set(
-        cubes
+        activeCubes
           .filter((cube) => toZoneByX(Number(cube.x ?? 0), container.depth) === zone)
           .map((cube) => String(cube.id))
       )
@@ -642,25 +644,25 @@ export default function LoadPlan3DViewPage() {
     }
 
     return {
-      cubeIds: new Set(cubes.map((cube) => String(cube.id))),
+      cubeIds: new Set(activeCubes.map((cube) => String(cube.id))),
       description: 'Resaltando cajas relacionadas con el warning seleccionado.',
     }
-  }, [activeWarningCard, container, cubes])
+  }, [activeWarningCard, container, activeCubes])
 
   const visualizerCubes = useMemo(() => {
-    if (!activeWarningCard) return cubes
+    if (!activeWarningCard) return activeCubes
     if (highlightResult.cubeIds.size === 0) {
-      return cubes.map((cube) => ({
+      return activeCubes.map((cube) => ({
         ...cube,
         color: '#94A3B8',
       }))
     }
 
-    return cubes.map((cube) => ({
+    return activeCubes.map((cube) => ({
       ...cube,
       color: highlightResult.cubeIds.has(String(cube.id)) ? '#F59E0B' : '#CBD5E1',
     }))
-  }, [activeWarningCard, cubes, highlightResult.cubeIds])
+  }, [activeWarningCard, activeCubes, highlightResult.cubeIds])
 
   useEffect(() => {
     if (!activeWarningHighlightKey) return
@@ -832,9 +834,9 @@ export default function LoadPlan3DViewPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => router.push(`/load-plans/${planId}/edit`)}>
+          <Button onClick={() => router.push(`/load-plans/${planId}/edit-layout`)}>
             <Pencil className="h-4 w-4 mr-2" />
-            Editar
+            Editar Carga de Unidad
           </Button>
           <Button variant="outline" onClick={downloadPdf}>
             <FileDown className="h-4 w-4 mr-2" />
@@ -848,6 +850,9 @@ export default function LoadPlan3DViewPage() {
           <CardTitle>Visualizacion 3D</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
+          <div className="border-b bg-gray-50 px-4 py-2 text-xs text-gray-700">
+            Vista principal del layout. Para ajustes manuales usa &quot;Editar Carga de Unidad&quot;.
+          </div>
           {activeWarningCard && (
             <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
               Warning activo: {activeWarningCard.presentation.title}. {highlightResult.description}
@@ -858,6 +863,7 @@ export default function LoadPlan3DViewPage() {
             cubes={visualizerCubes}
             focusCubeIds={Array.from(highlightResult.cubeIds)}
             focusToken={activeWarningHighlightKey}
+            showControlPanel={false}
           />
         </CardContent>
       </Card>

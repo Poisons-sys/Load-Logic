@@ -166,6 +166,13 @@ type ManualLayoutIssue = {
   message: string
 }
 
+type ManualIssuePresentation = {
+  title: string
+  explanation: string
+  details: string[]
+  actions: string[]
+}
+
 type ManualLayoutValidation = {
   outOfBounds: number
   collisions: number
@@ -352,6 +359,78 @@ function evaluateManualLayout(cubes: Cube3DData[], vehicle: OptimizeVehicle | un
     cogZone,
     issues,
     hasCritical: issues.some((issue) => issue.severity === 'critical'),
+  }
+}
+
+function presentManualIssue(issue: ManualLayoutIssue, validation: ManualLayoutValidation): ManualIssuePresentation {
+  if (issue.code === 'UNSUPPORTED_STACK') {
+    return {
+      title: 'Apilado sin soporte',
+      explanation: 'Hay cajas colocadas sobre otras sin base suficiente.',
+      details: [`Cajas afectadas: ${validation.unsupported}`],
+      actions: [
+        'Bajar las cajas sin soporte al piso o a una base estable.',
+        'Evitar voladizos entre cajas superiores e inferiores.',
+      ],
+    }
+  }
+
+  if (issue.code === 'AXLE_OVERLOAD') {
+    return {
+      title: 'Exceso de carga por ejes',
+      explanation: 'El reparto de peso por ejes rebasa los limites permitidos.',
+      details: [
+        `Exceso eje frontal: ${validation.frontOverKg.toFixed(1)} kg`,
+        `Exceso eje trasero: ${validation.rearOverKg.toFixed(1)} kg`,
+      ],
+      actions: [
+        'Mover carga pesada hacia el centro para compensar ejes.',
+        'Revisar productos pesados ubicados en extremos de la unidad.',
+      ],
+    }
+  }
+
+  if (issue.code === 'COG_RISK') {
+    const zoneLabel =
+      validation.cogZone === 'critical'
+        ? 'critica'
+        : validation.cogZone === 'caution'
+          ? 'precaucion'
+          : 'estable'
+    return {
+      title: 'Riesgo por centro de gravedad',
+      explanation: `El centro de gravedad esta en zona ${zoneLabel}.`,
+      details: [],
+      actions: [
+        'Bajar peso de niveles altos.',
+        'Repartir mejor la carga entre frente, centro y parte trasera.',
+      ],
+    }
+  }
+
+  if (issue.code === 'OUT_OF_BOUNDS') {
+    return {
+      title: 'Cajas fuera de limites',
+      explanation: 'Hay cajas fuera del volumen permitido de la unidad.',
+      details: [`Cajas fuera de limites: ${validation.outOfBounds}`],
+      actions: ['Reubicar esas cajas dentro del volumen del trailer.'],
+    }
+  }
+
+  if (issue.code === 'COLLISIONS') {
+    return {
+      title: 'Colisiones entre cajas',
+      explanation: 'Hay traslapes de cajas en el layout manual.',
+      details: [`Colisiones detectadas: ${validation.collisions}`],
+      actions: ['Separar y reacomodar las cajas que se traslapan.'],
+    }
+  }
+
+  return {
+    title: issue.code,
+    explanation: issue.message,
+    details: [],
+    actions: ['Revisar manualmente esta validacion antes de guardar el plan.'],
   }
 }
 
@@ -1263,17 +1342,54 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
             <Card>
               <CardContent className="pt-6">
                 <p className="text-sm font-medium text-gray-900">Validacion post-edicion (manual)</p>
-                <div className="mt-2 space-y-1 text-xs">
+                <div className="mt-2 space-y-2 text-xs">
                   {layoutValidation.issues.length === 0 ? (
                     <p className="text-emerald-700">Sin hallazgos criticos.</p>
                   ) : (
                     layoutValidation.issues.map((issue) => (
-                      <p
+                      <div
                         key={`${issue.code}-${issue.message}`}
-                        className={issue.severity === 'critical' ? 'text-red-700' : 'text-amber-700'}
+                        className={
+                          issue.severity === 'critical'
+                            ? 'rounded border border-red-200 bg-red-50 p-3 text-red-900'
+                            : 'rounded border border-amber-200 bg-amber-50 p-3 text-amber-900'
+                        }
                       >
-                        [{issue.code}] {issue.message}
-                      </p>
+                        {(() => {
+                          const p = presentManualIssue(issue, layoutValidation)
+                          return (
+                            <div className="space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="font-medium">{p.title}</p>
+                                <span className="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                  {issue.severity}
+                                </span>
+                              </div>
+                              <p>{p.explanation}</p>
+                              {p.details.length > 0 && (
+                                <div>
+                                  <p className="font-semibold">Datos clave</p>
+                                  <ul className="list-disc pl-4">
+                                    {p.details.map((line) => (
+                                      <li key={`${issue.code}-detail-${line}`}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {p.actions.length > 0 && (
+                                <div>
+                                  <p className="font-semibold">Accion sugerida</p>
+                                  <ul className="list-disc pl-4">
+                                    {p.actions.map((line) => (
+                                      <li key={`${issue.code}-action-${line}`}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
+                      </div>
                     ))
                   )}
                 </div>

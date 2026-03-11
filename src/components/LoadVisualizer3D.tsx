@@ -50,6 +50,8 @@ type Props = {
   utilizationPercent?: number;
   focusCubeIds?: string[];
   focusToken?: string | number | null;
+  forceEditMode?: boolean;
+  showControlPanel?: boolean;
   onCubeClick?: (cube: Cube3DData) => void;
   onCubesChange?: (cubes: Cube3DData[]) => void;
   onEditStatsChange?: (stats: LayoutEditStats) => void;
@@ -615,6 +617,8 @@ export default function LoadVisualizer3D({
   utilizationPercent,
   focusCubeIds,
   focusToken,
+  forceEditMode,
+  showControlPanel = true,
   onCubeClick,
   onCubesChange,
   onEditStatsChange,
@@ -644,6 +648,7 @@ export default function LoadVisualizer3D({
     updatedAt: 0,
   });
   const shouldEmitChangesRef = useRef(false);
+  const effectiveEditMode = forceEditMode ?? editMode;
 
   const stopFocusAnimation = useCallback(() => {
     if (focusAnimRafRef.current !== null) {
@@ -683,15 +688,15 @@ export default function LoadVisualizer3D({
   }, []);
 
   useEffect(() => {
-    if (!editMode) setIsTransforming(false);
-  }, [editMode]);
+    if (!effectiveEditMode) setIsTransforming(false);
+  }, [effectiveEditMode]);
 
   useEffect(() => {
     setVisibleMaxY(container.height);
   }, [container.height]);
 
   useEffect(() => {
-    if (editMode) return;
+    if (effectiveEditMode) return;
     if (!focusCubeIds || focusCubeIds.length === 0) return;
     const controls = orbitRef.current;
     if (!controls?.object) return;
@@ -775,7 +780,7 @@ export default function LoadVisualizer3D({
     };
 
     focusAnimRafRef.current = requestAnimationFrame(step);
-  }, [items, container, focusToken, focusCubeIds, editMode, stopFocusAnimation]);
+  }, [items, container, focusToken, focusCubeIds, effectiveEditMode, stopFocusAnimation]);
 
   useEffect(() => {
     return () => {
@@ -1238,7 +1243,7 @@ export default function LoadVisualizer3D({
   }, [bumpStats, items, selectedId, updateCube]);
 
   useEffect(() => {
-    if (!editMode || !selectedId) return;
+    if (!effectiveEditMode || !selectedId) return;
 
     const onKeyDown = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement | null;
@@ -1269,7 +1274,7 @@ export default function LoadVisualizer3D({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editMode, nudgeSelected, selectedId, snapStep, items]);
+  }, [effectiveEditMode, nudgeSelected, selectedId, snapStep, items]);
 
   const renderedItems = useMemo(
     () => items.filter((cube) => cube.y <= visibleMaxY + 0.001),
@@ -1284,7 +1289,7 @@ export default function LoadVisualizer3D({
           camera={cam}
           style={{ background: "#F3F4F6" }}
           onPointerMissed={() => {
-            if (!editMode) setSelectedId(null);
+            if (!effectiveEditMode) setSelectedId(null);
           }}
         >
           <ambientLight intensity={0.7} />
@@ -1299,7 +1304,7 @@ export default function LoadVisualizer3D({
           <OrbitControls
             ref={orbitRef}
             target={[0, container.height / 2, 0]}
-            enabled={!editMode && !isTransforming}
+            enabled={!isTransforming}
             enableDamping
             dampingFactor={0.08}
             minDistance={Math.max(container.width, container.depth) * 0.35}
@@ -1319,7 +1324,7 @@ export default function LoadVisualizer3D({
                 container={container}
                 onCubeClick={(c) => {
                   setSelectedId(c.id);
-                  if (editMode) setLayoutNotice(null);
+                  if (effectiveEditMode) setLayoutNotice(null);
                   onCubeClick?.(c);
                 }}
               />
@@ -1329,13 +1334,13 @@ export default function LoadVisualizer3D({
                   cube={selectedCube}
                   container={container}
                   snapStep={snapStep}
-                  editable={editMode && !lockedIds.includes(selectedCube.id)}
+                  editable={effectiveEditMode && !lockedIds.includes(selectedCube.id)}
                   onUpdate={updateCube}
                   onTransformingChange={setIsTransforming}
                   isSelected
                   onClick={(c) => {
                     setSelectedId(c.id);
-                    if (editMode) setLayoutNotice(null);
+                    if (effectiveEditMode) setLayoutNotice(null);
                     onCubeClick?.(c);
                   }}
                 />
@@ -1348,13 +1353,13 @@ export default function LoadVisualizer3D({
                 cube={cube}
                 container={container}
                 snapStep={snapStep}
-                editable={editMode && !lockedIds.includes(cube.id)}
+                editable={effectiveEditMode && !lockedIds.includes(cube.id)}
                 onUpdate={updateCube}
                 onTransformingChange={setIsTransforming}
                 isSelected={selectedId === cube.id}
                 onClick={(c) => {
                   setSelectedId(c.id);
-                  if (editMode) setLayoutNotice(null);
+                  if (effectiveEditMode) setLayoutNotice(null);
                   onCubeClick?.(c);
                 }}
               />
@@ -1363,6 +1368,7 @@ export default function LoadVisualizer3D({
         </Canvas>
       </div>
 
+      {showControlPanel && (
       <div className="mt-3 rounded-lg border bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-6 text-sm">
@@ -1425,9 +1431,9 @@ export default function LoadVisualizer3D({
                   return next;
                 })
               }
-              className={`rounded-md border px-3 py-2 text-sm hover:bg-gray-50 ${editMode ? "bg-gray-50" : ""}`}
+              className={`rounded-md border px-3 py-2 text-sm hover:bg-gray-50 ${effectiveEditMode ? "bg-gray-50" : ""}`}
             >
-              {editMode ? "Modo edición: ON" : "Modo edición: OFF"}
+              {effectiveEditMode ? "Modo edición: ON" : "Modo edición: OFF"}
             </button>
 
             <button
@@ -1539,7 +1545,7 @@ export default function LoadVisualizer3D({
                 </div>
               </div>
 
-              {editMode && (
+              {effectiveEditMode && (
                 <div className="mt-4 rounded-md border bg-gray-50 p-3">
                   <p className="mb-2 text-sm font-medium">Edicion fina</p>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
@@ -1584,6 +1590,7 @@ export default function LoadVisualizer3D({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
