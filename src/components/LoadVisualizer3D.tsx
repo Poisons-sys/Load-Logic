@@ -1200,8 +1200,15 @@ export default function LoadVisualizer3D({
       }
 
       const others = prev.filter((c) => c.id !== safe.id);
+      const stackedY = snap(findStackY(safe, others, container), snapStep);
+      const settleTolerance = Math.max(2, snapStep * 5);
+      const shouldSettle =
+        safe.y <= stackedY + settleTolerance && safe.y >= stackedY - settleTolerance;
+      const settled = shouldSettle
+        ? normalizeManualPlacement({ ...safe, y: stackedY })
+        : safe;
 
-      const resolved = reflowAfterMove(moving, safe, others);
+      const resolved = reflowAfterMove(moving, settled, others);
       if (!resolved) {
         setLayoutNotice("No hay espacio válido para ese movimiento sin salir del trailer ni colisionar.");
         return prev;
@@ -1219,7 +1226,7 @@ export default function LoadVisualizer3D({
       shouldEmitChangesRef.current = true;
       return next;
     });
-  }, [bumpStats, lockedIds, normalizeManualPlacement, pushHistory, reflowAfterMove]);
+  }, [bumpStats, lockedIds, normalizeManualPlacement, pushHistory, reflowAfterMove, container, snapStep]);
 
   const setSelectedPosition = (axis: "x" | "y" | "z", value: number) => {
     if (!selectedId || !Number.isFinite(value)) return;
