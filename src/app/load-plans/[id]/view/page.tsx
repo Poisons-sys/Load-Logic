@@ -851,11 +851,11 @@ export default function LoadPlan3DViewPage() {
         </CardHeader>
         <CardContent className="p-0">
           <div className="border-b bg-gray-50 px-4 py-2 text-xs text-gray-700">
-            Vista principal del layout. Para ajustes manuales usa &quot;Editar Carga de Unidad&quot;.
+            Vista principal del layout en modo consulta. Para ajustes manuales usa &quot;Editar Carga de Unidad&quot;.
           </div>
           {activeWarningCard && (
             <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-              Warning activo: {activeWarningCard.presentation.title}. {highlightResult.description}
+              Alerta activa: {activeWarningCard.presentation.title}. {highlightResult.description}
             </div>
           )}
           <LoadVisualizer3D
@@ -966,7 +966,7 @@ export default function LoadPlan3DViewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Warnings Detectados</CardTitle>
+          <CardTitle>Alertas Detectadas</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {warningIssues.length > 0 && (
@@ -982,7 +982,7 @@ export default function LoadPlan3DViewPage() {
             </div>
           )}
           {warningIssues.length === 0 && (
-            <p className="text-sm text-gray-500">No hay warnings activos en esta carga.</p>
+            <p className="text-sm text-gray-500">No hay alertas activas en esta carga.</p>
           )}
           {warningCards.map(({ issue, presentation, gate }, idx) => (
             <div
@@ -1047,7 +1047,7 @@ export default function LoadPlan3DViewPage() {
               </p>
               {presentation.details.length > 0 && (
                 <div className={gate.status === 'block' ? 'mt-2 text-xs text-red-800' : 'mt-2 text-xs text-amber-800'}>
-                  <p className="font-semibold">Datos del warning</p>
+                  <p className="font-semibold">Datos de la alerta</p>
                   <ul className="list-disc pl-4">
                     {presentation.details.map((line) => (
                       <li key={`${issue.code}-${line}`}>{line}</li>

@@ -112,10 +112,13 @@ export default function LoadPlansPage() {
   const [sortBy, setSortBy] = useState<SortMode>('recent')
   const [selectedPlan, setSelectedPlan] = useState<LoadPlan | null>(null)
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const fetchLoadPlans = useCallback(async () => {
     try {
+      setLoading(true)
+      setFetchError(null)
       const query = new URLSearchParams()
       if (statusFilter !== 'all') query.set('status', statusFilter)
       const response = await fetch(`/api/load-plans?${query.toString()}`, {
@@ -125,6 +128,7 @@ export default function LoadPlansPage() {
       setLoadPlans(Array.isArray(data?.data) ? data.data : [])
     } catch (error) {
       console.error('Error fetching load plans:', error)
+      setFetchError('No se pudieron cargar los planes. Intenta de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -292,9 +296,18 @@ export default function LoadPlansPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Planes de Carga</h1>
-          <p className="text-gray-500">Historial y gestion de planes optimizados</p>
+          <p className="text-gray-500">Consulta, seguimiento y acciones de planes de carga.</p>
         </div>
       </div>
+
+      {fetchError && (
+        <Card>
+          <CardContent className="p-4 flex items-center justify-between gap-3">
+            <p className="text-sm text-red-600">{fetchError}</p>
+            <Button variant="outline" onClick={() => void fetchLoadPlans()}>Reintentar</Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="p-4 space-y-3">
@@ -401,7 +414,7 @@ export default function LoadPlansPage() {
                         <Badge variant="destructive">{critical} criticos</Badge>
                       ) : warnings > 0 ? (
                         <Badge variant="outline" className="text-amber-700 border-amber-600">
-                          {warnings} warnings
+                          {warnings} alertas
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-green-700 border-green-600">

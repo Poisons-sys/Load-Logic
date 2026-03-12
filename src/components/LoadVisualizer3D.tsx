@@ -87,6 +87,11 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
+function finite(value: unknown, fallback: number) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /** ===========================
  *  Rotación real + huella efectiva (EasyCargo style)
  *  =========================== */
@@ -272,6 +277,39 @@ function autoResolveOverlaps(input: Cube3DData[], container: Container3DProps) {
   }
 
   return placed;
+}
+
+function sanitizeCube(raw: Cube3DData, index: number): Cube3DData {
+  const width = Math.max(1, finite(raw.width, 1));
+  const height = Math.max(1, finite(raw.height, 1));
+  const depth = Math.max(1, finite(raw.depth, 1));
+  return {
+    ...raw,
+    id: String(raw.id ?? `cube-${index}`),
+    x: Math.max(0, finite(raw.x, 0)),
+    y: Math.max(0, finite(raw.y, 0)),
+    z: Math.max(0, finite(raw.z, 0)),
+    width,
+    height,
+    depth,
+    rotY: finite(raw.rotY, 0),
+    weightKg: finite(raw.weightKg, finite(raw.weight, 0)),
+  };
+}
+
+function settleByGravity(input: Cube3DData[], container: Container3DProps) {
+  const sorted = [...input].sort((a, b) => {
+    if (a.y !== b.y) return a.y - b.y;
+    if (a.x !== b.x) return a.x - b.x;
+    return a.z - b.z;
+  });
+  const settled: Cube3DData[] = [];
+  for (const cube of sorted) {
+    const y = snap(findStackY(cube, settled, container));
+    const next = clampCubeInsideContainer({ ...cube, y }, container);
+    settled.push(next);
+  }
+  return settled;
 }
 
 /**
@@ -806,20 +844,21 @@ export default function LoadVisualizer3D({
     redoStackRef.current = [];
     syncHistoryCounts();
 
-    const normalized = (cubes ?? []).map((c) =>
-      clampCubeInsideContainer(normalizeCubeXYZ(c, containerBounds), containerBounds)
-    );
+    const normalized = (cubes ?? []).map((c, index) => {
+      const safe = sanitizeCube(c, index);
+      return clampCubeInsideContainer(normalizeCubeXYZ(safe, containerBounds), containerBounds);
+    });
 
     const hasExplicitLayout = normalized.some(
       (c) => Math.abs(c.x) > 0.001 || Math.abs(c.y) > 0.001 || Math.abs(c.z) > 0.001
     );
 
     if (hasExplicitLayout) {
-      setItems(normalized);
+      setItems(settleByGravity(normalized, containerBounds));
       return;
     }
 
-    setItems(packEasyCargoRows(normalized, containerBounds));
+    setItems(settleByGravity(packEasyCargoRows(normalized, containerBounds), containerBounds));
   }, [cubes, container.width, container.height, container.depth, syncHistoryCounts]);
 
   useEffect(() => {

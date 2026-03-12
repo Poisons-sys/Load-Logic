@@ -1386,10 +1386,88 @@ function countCriticalIssues(validations: OptimizeLoadOutput['validations']) {
   return validations.filter((v) => v.severity === 'critical').length
 }
 
+function countWarningIssues(validations: OptimizeLoadOutput['validations']) {
+  return validations.filter((v) => v.severity === 'warning').length
+}
+
+function axleProfileDeviation(output: OptimizeLoadOutput) {
+  const front = Number(output.axleDistribution.frontPct ?? 0)
+  const min = Number(output.axleDistribution.expectedFrontPctRange.min ?? 0)
+  const max = Number(output.axleDistribution.expectedFrontPctRange.max ?? 0)
+  if (front < min) return min - front
+  if (front > max) return front - max
+  return 0
+}
+
+function lengthImbalanceDeviation(output: OptimizeLoadOutput) {
+  const front = Number(output.weightDistribution.front ?? 0)
+  const rear = Number(output.weightDistribution.rear ?? 0)
+  const center = Number(output.weightDistribution.center ?? 0)
+  const minEdge = Math.min(front, rear)
+  const edgePenalty = Math.max(0, 20 - minEdge)
+  const centerPenalty = Math.max(0, Math.abs(center - 33.33) - 12)
+  return edgePenalty + centerPenalty
+}
+
+function safetyPenalty(output: OptimizeLoadOutput) {
+  const axleOverKg =
+    Number(output.axleDistribution.frontOverKg ?? 0) +
+    Number(output.axleDistribution.rearOverKg ?? 0)
+  const profileDeviation = axleProfileDeviation(output)
+  const lengthDeviation = lengthImbalanceDeviation(output)
+  const stabilityPenalty = Math.max(0, 100 - Number(output.stability.score ?? 0))
+
+  return {
+    axleOverKg,
+    profileDeviation,
+    lengthDeviation,
+    stabilityPenalty,
+    criticalCount: countCriticalIssues(output.validations),
+    warningCount: countWarningIssues(output.validations),
+  }
+}
+
+function hasSaferRiskProfile(next: OptimizeLoadOutput, current: OptimizeLoadOutput) {
+  const a = safetyPenalty(next)
+  const b = safetyPenalty(current)
+
+  if (a.criticalCount !== b.criticalCount) return a.criticalCount < b.criticalCount
+  if (Math.abs(a.axleOverKg - b.axleOverKg) > 0.1) return a.axleOverKg < b.axleOverKg
+  if (Math.abs(a.profileDeviation - b.profileDeviation) > 0.05) return a.profileDeviation < b.profileDeviation
+  if (Math.abs(a.stabilityPenalty - b.stabilityPenalty) > 0.2) return a.stabilityPenalty < b.stabilityPenalty
+  if (Math.abs(a.lengthDeviation - b.lengthDeviation) > 0.05) return a.lengthDeviation < b.lengthDeviation
+  if (a.warningCount !== b.warningCount) return a.warningCount < b.warningCount
+  return false
+}
+
 function isBetterCandidate(next: OptimizeLoadOutput, current: OptimizeLoadOutput) {
-  const nextCritical = countCriticalIssues(next.validations)
-  const currentCritical = countCriticalIssues(current.validations)
-  if (nextCritical !== currentCritical) return nextCritical < currentCritical
+  const nextRisk = safetyPenalty(next)
+  const currentRisk = safetyPenalty(current)
+
+  if (nextRisk.criticalCount !== currentRisk.criticalCount) {
+    return nextRisk.criticalCount < currentRisk.criticalCount
+  }
+
+  // Prioritize compliance by axles before maximizing placements/score.
+  if (Math.abs(nextRisk.axleOverKg - currentRisk.axleOverKg) > 0.1) {
+    return nextRisk.axleOverKg < currentRisk.axleOverKg
+  }
+
+  if (Math.abs(nextRisk.profileDeviation - currentRisk.profileDeviation) > 0.05) {
+    return nextRisk.profileDeviation < currentRisk.profileDeviation
+  }
+
+  if (Math.abs(nextRisk.stabilityPenalty - currentRisk.stabilityPenalty) > 0.2) {
+    return nextRisk.stabilityPenalty < currentRisk.stabilityPenalty
+  }
+
+  if (Math.abs(nextRisk.lengthDeviation - currentRisk.lengthDeviation) > 0.05) {
+    return nextRisk.lengthDeviation < currentRisk.lengthDeviation
+  }
+
+  if (nextRisk.warningCount !== currentRisk.warningCount) {
+    return nextRisk.warningCount < currentRisk.warningCount
+  }
 
   if (next.placedItemsCount !== current.placedItemsCount) {
     return next.placedItemsCount > current.placedItemsCount
@@ -1502,11 +1580,13 @@ export async function optimizeLoad(
 
   const baselineCritical = countCriticalIssues(baseline.validations)
   const bestCritical = countCriticalIssues(best.validations)
+  const saferThanBaseline = hasSaferRiskProfile(best, baseline)
   const improved =
     selectedCandidateIndex !== 0 &&
     (best.kpis.overallScore > baseline.kpis.overallScore ||
       best.placedItemsCount > baseline.placedItemsCount ||
-      bestCritical < baselineCritical)
+      bestCritical < baselineCritical ||
+      saferThanBaseline)
 
   return {
     ...best,

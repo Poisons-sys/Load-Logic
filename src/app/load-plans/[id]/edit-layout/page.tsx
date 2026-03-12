@@ -96,6 +96,7 @@ export default function LoadPlanEditLayoutPage() {
   const [error, setError] = useState<string | null>(null)
   const [savingLayout, setSavingLayout] = useState(false)
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null)
+  const [saveFeedbackType, setSaveFeedbackType] = useState<'success' | 'error'>('success')
   const [layoutEditStats, setLayoutEditStats] = useState<LayoutEditStats>({
     moves: 0,
     swaps: 0,
@@ -254,9 +255,40 @@ export default function LoadPlanEditLayoutPage() {
   }, [plan?.id, plan?.layoutVersion, planCubes])
 
   const activeCubes = layoutDraftCubes ?? planCubes
+  const baselineSignature = useMemo(
+    () =>
+      JSON.stringify(
+        planCubes
+          .map((cube) => ({
+            id: String(cube.id),
+            x: Number(cube.x ?? 0).toFixed(2),
+            y: Number(cube.y ?? 0).toFixed(2),
+            z: Number(cube.z ?? 0).toFixed(2),
+            rotY: Number(cube.rotY ?? 0).toFixed(4),
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id))
+      ),
+    [planCubes]
+  )
+  const currentSignature = useMemo(
+    () =>
+      JSON.stringify(
+        activeCubes
+          .map((cube) => ({
+            id: String(cube.id),
+            x: Number(cube.x ?? 0).toFixed(2),
+            y: Number(cube.y ?? 0).toFixed(2),
+            z: Number(cube.z ?? 0).toFixed(2),
+            rotY: Number(cube.rotY ?? 0).toFixed(4),
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id))
+      ),
+    [activeCubes]
+  )
+  const hasUnsavedChanges = baselineSignature !== currentSignature
 
   const saveManualLayoutVersion = async () => {
-    if (!planId || activeCubes.length === 0) return
+    if (!planId || activeCubes.length === 0 || !hasUnsavedChanges) return
     try {
       setSavingLayout(true)
       setSaveFeedback(null)
@@ -295,17 +327,41 @@ export default function LoadPlanEditLayoutPage() {
       const json = await res.json()
       const nextPlan = json?.data?.loadPlan ?? null
       if (nextPlan) setPlan(nextPlan)
+      setSaveFeedbackType('success')
       setSaveFeedback(`Layout manual guardado como version v${Number(nextPlan?.layoutVersion ?? plan?.layoutVersion ?? 1)}.`)
     } catch (e: any) {
-      setSaveFeedback(e?.message ?? 'Error guardando layout manual')
+      setSaveFeedbackType('error')
+      setSaveFeedback(e?.message ?? 'Error guardando layout manual. Verifica tu conexion e intenta de nuevo.')
     } finally {
       setSavingLayout(false)
     }
   }
 
-  if (loading) return <div className="p-6">Cargando editor de carga...</div>
-  if (error) return <div className="p-6 text-red-600">{error}</div>
-  if (!plan || !container) return <div className="p-6">Plan no disponible.</div>
+  if (loading) {
+    return (
+      <div className="p-6">
+        <p className="text-sm text-gray-600">Cargando editor de carga...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 space-y-3">
+        <p className="text-red-600">{error}</p>
+        <Button variant="outline" onClick={() => void fetchPlan()}>Reintentar</Button>
+      </div>
+    )
+  }
+
+  if (!plan || !container) {
+    return (
+      <div className="p-6 space-y-3">
+        <p>Plan no disponible.</p>
+        <Button variant="outline" onClick={() => router.push('/load-plans')}>Volver a planes</Button>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6 space-y-4">
@@ -320,15 +376,42 @@ export default function LoadPlanEditLayoutPage() {
             <p className="text-sm text-gray-500">
               {plan.name} - version actual v{Number(plan.layoutVersion ?? 1)}
             </p>
+            <p className="text-xs text-gray-500">
+              Ajusta posiciones manualmente y guarda una nueva version del layout.
+            </p>
           </div>
         </div>
-        <Button onClick={saveManualLayoutVersion} disabled={savingLayout || activeCubes.length === 0}>
-          <Save className="h-4 w-4 mr-2" />
-          {savingLayout ? 'Guardando...' : 'Guardar Version Manual'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setLayoutDraftCubes(planCubes)
+              setSaveFeedback(null)
+            }}
+            disabled={!hasUnsavedChanges || savingLayout}
+          >
+            Descartar cambios
+          </Button>
+          <Button onClick={saveManualLayoutVersion} disabled={savingLayout || activeCubes.length === 0 || !hasUnsavedChanges}>
+            <Save className="h-4 w-4 mr-2" />
+            {savingLayout ? 'Guardando...' : 'Guardar version manual'}
+          </Button>
+        </div>
       </div>
 
-      {saveFeedback && <p className="text-sm text-gray-700">{saveFeedback}</p>}
+      <p className="text-sm text-gray-600">
+        {hasUnsavedChanges ? 'Hay cambios manuales sin guardar.' : 'Sin cambios pendientes.'}
+      </p>
+      {saveFeedback && (
+        <p className={`text-sm ${saveFeedbackType === 'error' ? 'text-red-600' : 'text-green-700'}`}>
+          {saveFeedback}
+        </p>
+      )}
+      {activeCubes.length === 0 && (
+        <p className="text-sm text-amber-700">
+          No hay piezas para editar en este layout.
+        </p>
+      )}
 
       <Card>
         <CardHeader>
