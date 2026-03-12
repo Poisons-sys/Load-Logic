@@ -128,6 +128,50 @@ function assertNoOverlaps(placedItems: Placed[]) {
   }
 }
 
+function almostEqual(a: number, b: number, eps = 0.01) {
+  return Math.abs(a - b) <= eps
+}
+
+function overlapsXZ(a: Placed, b: Placed): boolean {
+  const da = footprint(a)
+  const db = footprint(b)
+
+  const ax1 = a.position.x
+  const ax2 = a.position.x + da.w
+  const az1 = a.position.z
+  const az2 = a.position.z + da.d
+
+  const bx1 = b.position.x
+  const bx2 = b.position.x + db.w
+  const bz1 = b.position.z
+  const bz2 = b.position.z + db.d
+
+  const overlapX = ax1 < bx2 - 0.01 && ax2 > bx1 + 0.01
+  const overlapZ = az1 < bz2 - 0.01 && az2 > bz1 + 0.01
+
+  return overlapX && overlapZ
+}
+
+function assertNoFloatingGaps(placedItems: Placed[]) {
+  for (let i = 0; i < placedItems.length; i++) {
+    const item = placedItems[i]
+    if (item.position.y <= 0.01) continue
+
+    const supports = placedItems.filter((other, j) => {
+      if (i === j) return false
+      if (!overlapsXZ(item, other)) return false
+      const top = other.position.y + footprint(other).h
+      return almostEqual(top, item.position.y, 0.51)
+    })
+
+    assert.equal(
+      supports.length > 0,
+      true,
+      `Floating gap detected for item ${i} at y=${item.position.y}`
+    )
+  }
+}
+
 function fragilityRank(level: FragilityLevel) {
   switch (level) {
     case 'baja':
@@ -198,6 +242,7 @@ test('genera capas verticales limpias cuando solo cabe una huella por piso', asy
     [[0, 0], [0, 0], [0, 0]]
   )
   assertNoOverlaps(result.placedItems)
+  assertNoFloatingGaps(result.placedItems)
 })
 
 test('respeta maxStackHeight y no coloca niveles extra', async () => {
@@ -221,6 +266,7 @@ test('respeta maxStackHeight y no coloca niveles extra', async () => {
   assert.equal(result.placedItems.length, 2)
   const yValues = result.placedItems.map((x) => x.position.y).sort((a, b) => a - b)
   assert.deepEqual(yValues, [0, 100])
+  assertNoFloatingGaps(result.placedItems)
 })
 
 test('si hay apilado, la fragilidad de arriba nunca es menor que la base', async () => {
@@ -322,4 +368,52 @@ test('intelligent usa 4 escenarios para optimizacion grande', async () => {
 
   assert.equal(result.ai?.strategy, 'intelligent')
   assert.equal(result.ai?.candidatesEvaluated, 4)
+})
+
+test('baseline asienta alturas no multiples de resolucion sin crear gap', async () => {
+  const vehicle = makeVehicle({
+    internalLength: 120,
+    internalWidth: 120,
+    internalHeight: 200,
+    maxWeight: 30_000,
+  })
+  const product = makeProduct('p-non-grid', {
+    length: 120,
+    width: 120,
+    height: 37,
+    weight: 80,
+    stackable: true,
+    maxStackHeight: 4,
+  })
+
+  const result = await optimizeLoad([{ product, quantity: 3 }], vehicle, { strategy: 'baseline' })
+  assert.equal(result.placedItems.length, 3)
+  assertNoOverlaps(result.placedItems)
+  assertNoFloatingGaps(result.placedItems)
+})
+
+test('intelligent tambien evita gaps en apilado con alturas no multiples', async () => {
+  const vehicle = makeVehicle({
+    internalLength: 120,
+    internalWidth: 120,
+    internalHeight: 200,
+    maxWeight: 30_000,
+  })
+  const product = makeProduct('p-non-grid-ai', {
+    length: 120,
+    width: 120,
+    height: 37,
+    weight: 80,
+    stackable: true,
+    maxStackHeight: 4,
+  })
+
+  const result = await optimizeLoad(
+    [{ product, quantity: 3 }],
+    vehicle,
+    { strategy: 'intelligent', seed: 2026 }
+  )
+  assert.equal(result.placedItems.length, 3)
+  assertNoOverlaps(result.placedItems)
+  assertNoFloatingGaps(result.placedItems)
 })

@@ -929,11 +929,15 @@ export default function LoadVisualizer3D({
       anchor: { x: number; y?: number; z: number },
       seen: Set<string>
     ) => {
-      const base = normalizeManualPlacement({
+      const baseRaw = normalizeManualPlacement({
         ...cube,
         x: anchor.x,
         y: anchor.y ?? cube.y,
         z: anchor.z,
+      });
+      const base = normalizeManualPlacement({
+        ...baseRaw,
+        y: snap(findStackY(baseRaw, occupied, container), snapStep),
       });
       const keyBase = `${base.x}|${base.y}|${base.z}|${normRotY(base.rotY)}`;
       if (seen.has(keyBase)) return null;
@@ -941,21 +945,14 @@ export default function LoadVisualizer3D({
 
       const variants: Cube3DData[] = [base];
 
-      if (Math.abs(base.y) > 0.001) {
-        variants.push(normalizeManualPlacement({ ...base, y: 0 }));
-      }
-
-      const stackedY = snap(findStackY(base, occupied, container));
-      if (Math.abs(stackedY - base.y) > 0.001) {
-        variants.push(normalizeManualPlacement({ ...base, y: stackedY }));
-      }
+      if (Math.abs(base.y) > 0.001) variants.push(normalizeManualPlacement({ ...base, y: 0 }));
 
       for (const variant of variants) {
         if (!collidesWithOthers(variant, occupied)) return variant;
       }
       return null;
     },
-    [collidesWithOthers, container, normalizeManualPlacement]
+    [collidesWithOthers, container, normalizeManualPlacement, snapStep]
   );
 
   const findNearestFreeSlot = useCallback(
