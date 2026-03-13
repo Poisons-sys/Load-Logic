@@ -3,7 +3,7 @@
 import React, { Fragment, useEffect, useMemo, useState, useRef, useCallback, useLayoutEffect } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { OrbitControls, Grid, TransformControls } from "@react-three/drei";
+import { OrbitControls, Grid, TransformControls, useGLTF } from "@react-three/drei";
 import trailerWallImg from "../assets/trailer-wall.png";
 import trailerDoorsImg from "../assets/trailer-doors.png";
 
@@ -71,6 +71,7 @@ export type LayoutEditStats = {
 
 const SNAP_STEP = 1;
 const GAP = 2;
+const TRAILER_MODEL_URL = "/models/trailer.gltf";
 
 function cloneCubes(input: Cube3DData[]) {
   return input.map((cube) => ({
@@ -448,6 +449,97 @@ function Container({ width, height, depth }: Container3DProps) {
         <edgesGeometry args={[new THREE.BoxGeometry(width, height, depth)]} />
         <lineBasicMaterial color="#1A1A1A" linewidth={2} depthTest={false} />
       </lineSegments>
+    </group>
+  );
+}
+
+function resolveTrailerCargoAnchor(root: THREE.Object3D): THREE.Object3D {
+  const namedAnchor = root.getObjectByName("Cube");
+  if (namedAnchor) return namedAnchor;
+
+  let bestMesh: THREE.Mesh | null = null;
+  let bestVolume = 0;
+  const size = new THREE.Vector3();
+
+  root.updateWorldMatrix(true, true);
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const bbox = new THREE.Box3().setFromObject(obj);
+    bbox.getSize(size);
+    const volume = size.x * size.y * size.z;
+    if (volume > bestVolume) {
+      bestVolume = volume;
+      bestMesh = obj;
+    }
+  });
+
+  return bestMesh ?? root;
+}
+
+function TrailerReferenceModel({ container }: { container: Container3DProps }) {
+  const gltf = useGLTF(TRAILER_MODEL_URL) as { scene: THREE.Group };
+
+  const trailerScene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+
+  useEffect(() => {
+    trailerScene.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+      obj.raycast = () => null;
+
+      const source = Array.isArray(obj.material) ? obj.material : [obj.material];
+      const ghost = source.map((mat) => {
+        const cloned =
+          mat && typeof (mat as any).clone === "function"
+            ? ((mat as any).clone() as THREE.MeshStandardMaterial)
+            : new THREE.MeshStandardMaterial({ color: "#9CA3AF" });
+        cloned.transparent = true;
+        cloned.opacity = 0.36;
+        cloned.depthWrite = false;
+        cloned.metalness = Math.max(0, Number(cloned.metalness ?? 0.1));
+        cloned.roughness = Math.max(0.35, Number(cloned.roughness ?? 0.7));
+        return cloned;
+      });
+
+      obj.material = (Array.isArray(obj.material) ? ghost : ghost[0]) as any;
+    });
+  }, [trailerScene]);
+
+  const bind = useMemo(() => {
+    trailerScene.updateWorldMatrix(true, true);
+    const cargoAnchor = resolveTrailerCargoAnchor(trailerScene);
+    const cargoBox = new THREE.Box3().setFromObject(cargoAnchor);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    cargoBox.getSize(size);
+    cargoBox.getCenter(center);
+
+    if (size.x <= 0.0001 || size.y <= 0.0001 || size.z <= 0.0001) return null;
+
+    const scale = Math.min(
+      container.width / size.x,
+      container.height / size.y,
+      container.depth / size.z
+    ) * 1.02; // un poco mas grande para que la carga quede visible dentro
+
+    if (!Number.isFinite(scale) || scale <= 0) return null;
+
+    return {
+      scale,
+      position: [
+        -center.x * scale,
+        -cargoBox.min.y * scale,
+        -center.z * scale,
+      ] as [number, number, number],
+    };
+  }, [container.width, container.height, container.depth, trailerScene]);
+
+  if (!bind) return null;
+
+  return (
+    <group position={bind.position} scale={[bind.scale, bind.scale, bind.scale]} renderOrder={-1}>
+      <primitive object={trailerScene} />
     </group>
   );
 }
@@ -1363,6 +1455,7 @@ export default function LoadVisualizer3D({
           <ClampPan controlsRef={orbitRef} container={container} />
 
           <ReferenceGrid width={container.width} depth={container.depth} />
+          <TrailerReferenceModel container={container} />
           <Container {...container} />
 
           {renderedItems.length > 100 ? (
@@ -1643,3 +1736,4 @@ export default function LoadVisualizer3D({
   );
 }
 
+useGLTF.preload(TRAILER_MODEL_URL);
