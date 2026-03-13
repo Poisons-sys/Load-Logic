@@ -73,7 +73,7 @@ const SNAP_STEP = 1;
 const GAP = 2;
 const TRAILER_MODEL_URL = "/models/trailer.gltf?v=20260313-2";
 const TRAILER_HITCH_GAP = 0;
-const TRAILER_ATTACH_SIDE: "front" | "rear" = "front";
+const TRAILER_ATTACH_SIDE: "front" | "rear" = "rear";
 
 function cloneCubes(input: Cube3DData[]) {
   return input.map((cube) => ({
