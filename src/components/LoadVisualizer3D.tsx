@@ -477,6 +477,33 @@ function resolveTrailerCargoAnchor(root: THREE.Object3D): THREE.Object3D {
   return bestMesh ?? root;
 }
 
+function resolveTrailerSceneBounds(root: THREE.Object3D) {
+  const bounds = new THREE.Box3();
+  const meshBox = new THREE.Box3();
+  let hasMesh = false;
+
+  root.updateWorldMatrix(true, true);
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    if (obj.name === "Plane" || !obj.visible) return;
+
+    const geom = obj.geometry;
+    if (!geom) return;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    if (!geom.boundingBox) return;
+
+    meshBox.copy(geom.boundingBox).applyMatrix4(obj.matrixWorld);
+    if (!hasMesh) {
+      bounds.copy(meshBox);
+      hasMesh = true;
+      return;
+    }
+    bounds.union(meshBox);
+  });
+
+  return hasMesh ? bounds : null;
+}
+
 function TrailerReferenceModel({ container }: { container: Container3DProps }) {
   const gltf = useGLTF(TRAILER_MODEL_URL) as { scene: THREE.Group };
 
@@ -515,13 +542,13 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
     trailerScene.updateWorldMatrix(true, true);
     const cargoAnchor = resolveTrailerCargoAnchor(trailerScene);
     const cargoBox = new THREE.Box3().setFromObject(cargoAnchor);
-    const sceneBox = new THREE.Box3().setFromObject(trailerScene);
+    const sceneBox = resolveTrailerSceneBounds(trailerScene);
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
     cargoBox.getSize(size);
     cargoBox.getCenter(center);
 
-    if (size.x <= 0.0001 || size.y <= 0.0001 || size.z <= 0.0001) return null;
+    if (!sceneBox || size.x <= 0.0001 || size.y <= 0.0001 || size.z <= 0.0001) return null;
 
     const scale = Math.min(
       container.width / size.x,
