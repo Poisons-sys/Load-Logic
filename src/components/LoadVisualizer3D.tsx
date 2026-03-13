@@ -521,20 +521,20 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
       obj.raycast = () => null;
 
       const source = Array.isArray(obj.material) ? obj.material : [obj.material];
-      const ghost = source.map((mat) => {
+      const solid = source.map((mat) => {
         const cloned =
-          mat && typeof (mat as any).clone === "function"
-            ? ((mat as any).clone() as THREE.MeshStandardMaterial)
+          mat && typeof (mat as THREE.Material).clone === "function"
+            ? ((mat as THREE.Material).clone() as THREE.Material)
             : new THREE.MeshStandardMaterial({ color: "#9CA3AF" });
-        cloned.transparent = true;
-        cloned.opacity = 0.36;
-        cloned.depthWrite = false;
-        cloned.metalness = Math.max(0, Number(cloned.metalness ?? 0.1));
-        cloned.roughness = Math.max(0.35, Number(cloned.roughness ?? 0.7));
+        cloned.transparent = false;
+        cloned.opacity = 1;
+        cloned.depthWrite = true;
+        cloned.depthTest = true;
+        cloned.side = THREE.FrontSide;
         return cloned;
       });
 
-      obj.material = (Array.isArray(obj.material) ? ghost : ghost[0]) as any;
+      obj.material = (Array.isArray(obj.material) ? solid : solid[0]) as any;
     });
   }, [trailerScene]);
 
