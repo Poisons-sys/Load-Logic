@@ -586,7 +586,9 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
     const attachFront = TRAILER_ATTACH_SIDE === "front";
     // En "rear" queremos que el tractor apunte hacia el frente de la caja.
     const rotationY = attachFront ? 0 : Math.PI;
-    const hitchLocalZ = cargoBox.max.z;
+    // El punto de acople del modelo esta del lado de puertas (min.z en este GLTF).
+    // Usar este borde mantiene el tractor fuera del contenedor.
+    const hitchLocalZ = cargoBox.min.z;
     const hitchOffsetZ = (rotationY === Math.PI ? -hitchLocalZ : hitchLocalZ) * scale;
     const frontPlaneZ = container.depth / 2;
     const rearPlaneZ = -container.depth / 2;
