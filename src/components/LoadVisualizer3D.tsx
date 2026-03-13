@@ -72,6 +72,8 @@ export type LayoutEditStats = {
 const SNAP_STEP = 1;
 const GAP = 2;
 const TRAILER_MODEL_URL = "/models/trailer.gltf";
+const TRAILER_MIN_FRONT_OVERHANG = 6;
+const TRAILER_FRONT_OVERHANG_RATIO = 0.06;
 
 function cloneCubes(input: Cube3DData[]) {
   return input.map((cube) => ({
@@ -484,6 +486,10 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
   useEffect(() => {
     trailerScene.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
+      if (obj.name === "Plane") {
+        obj.visible = false;
+        return;
+      }
       obj.castShadow = true;
       obj.receiveShadow = true;
       obj.raycast = () => null;
@@ -525,14 +531,19 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
 
     if (!Number.isFinite(scale) || scale <= 0) return null;
 
+    const frontOverhang = Math.max(
+      TRAILER_MIN_FRONT_OVERHANG,
+      container.depth * TRAILER_FRONT_OVERHANG_RATIO
+    );
+
     return {
       scale,
       position: [
         -center.x * scale,
         -cargoBox.min.y * scale,
         // Alinear el frente de la referencia con el frente del contenedor
-        // para que el tracto quede enganchado por fuera, no centrado dentro.
-        container.depth / 2 - cargoBox.max.z * scale,
+        // y dar un overhang minimo para que el tracto quede claramente afuera.
+        container.depth / 2 - cargoBox.max.z * scale + frontOverhang,
       ] as [number, number, number],
     };
   }, [container.width, container.height, container.depth, trailerScene]);
