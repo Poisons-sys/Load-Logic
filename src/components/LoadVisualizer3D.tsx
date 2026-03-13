@@ -454,29 +454,6 @@ function Container({ width, height, depth }: Container3DProps) {
   );
 }
 
-function resolveTrailerCargoAnchor(root: THREE.Object3D): THREE.Object3D {
-  const namedAnchor = root.getObjectByName("Cube");
-  if (namedAnchor) return namedAnchor;
-
-  let bestMesh: THREE.Mesh | null = null;
-  let bestVolume = 0;
-  const size = new THREE.Vector3();
-
-  root.updateWorldMatrix(true, true);
-  root.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh)) return;
-    const bbox = new THREE.Box3().setFromObject(obj);
-    bbox.getSize(size);
-    const volume = size.x * size.y * size.z;
-    if (volume > bestVolume) {
-      bestVolume = volume;
-      bestMesh = obj;
-    }
-  });
-
-  return bestMesh ?? root;
-}
-
 function resolveTrailerSceneBounds(root: THREE.Object3D) {
   const bounds = new THREE.Box3();
   const meshBox = new THREE.Box3();
@@ -504,10 +481,55 @@ function resolveTrailerSceneBounds(root: THREE.Object3D) {
   return hasMesh ? bounds : null;
 }
 
+function resolveTrailerCargoBounds(root: THREE.Object3D) {
+  const bounds = new THREE.Box3();
+  const meshBox = new THREE.Box3();
+  let hasMesh = false;
+
+  root.updateWorldMatrix(true, true);
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    if (obj.name !== "Cube" || !obj.visible) return;
+
+    const geom = obj.geometry;
+    if (!geom) return;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    if (!geom.boundingBox) return;
+
+    meshBox.copy(geom.boundingBox).applyMatrix4(obj.matrixWorld);
+    if (!hasMesh) {
+      bounds.copy(meshBox);
+      hasMesh = true;
+      return;
+    }
+    bounds.union(meshBox);
+  });
+
+  if (hasMesh) return bounds;
+  return resolveTrailerSceneBounds(root);
+}
+
 function TrailerReferenceModel({ container }: { container: Container3DProps }) {
   const gltf = useGLTF(TRAILER_MODEL_URL) as { scene: THREE.Group };
 
-  const trailerScene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+  const trailerScene = useMemo(() => {
+    const primary = gltf.scene.clone(true);
+    const primaryBounds = resolveTrailerSceneBounds(primary);
+    if (!primaryBounds) return primary;
+
+    const eps = 0.001;
+    const isOneSidedInX = primaryBounds.min.x >= -eps || primaryBounds.max.x <= eps;
+    if (!isOneSidedInX) return primary;
+
+    // Este modelo trae solo medio trailer; espejarlo evita que un lateral se vea "cortado".
+    const mirrored = gltf.scene.clone(true);
+    mirrored.scale.x = -1;
+
+    const combined = new THREE.Group();
+    combined.add(primary);
+    combined.add(mirrored);
+    return combined;
+  }, [gltf.scene]);
 
   useEffect(() => {
     trailerScene.traverse((obj) => {
@@ -542,11 +564,11 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
 
   const bind = useMemo(() => {
     trailerScene.updateWorldMatrix(true, true);
-    const cargoAnchor = resolveTrailerCargoAnchor(trailerScene);
-    const cargoBox = new THREE.Box3().setFromObject(cargoAnchor);
+    const cargoBox = resolveTrailerCargoBounds(trailerScene);
     const sceneBox = resolveTrailerSceneBounds(trailerScene);
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
+    if (!cargoBox) return null;
     cargoBox.getSize(size);
     cargoBox.getCenter(center);
 
