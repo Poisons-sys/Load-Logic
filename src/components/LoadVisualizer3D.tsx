@@ -466,10 +466,42 @@ function TrailerAxles({ width, depth, axleCount }: { width: number; depth: numbe
   const sideInset = wheelThickness * 0.9;
   const wheelX = Math.max(0, width / 2 - sideInset);
   const wheelY = -wheelRadius;
-  const axleSpacing = Math.max(wheelRadius * 1.4, depth * 0.04);
-  const firstAxleZ = -depth / 2 + Math.max(wheelRadius * 1.8, depth * 0.12);
+  const axleMargin = Math.max(wheelRadius * 1.8, depth * 0.09);
+  const minZ = -depth / 2 + axleMargin;
+  const maxZ = depth / 2 - axleMargin;
+  const usableDepth = Math.max(1, maxZ - minZ);
 
-  const axleZs = Array.from({ length: totalAxles }, (_, i) => firstAxleZ + i * axleSpacing);
+  // Distribucion por grupos (no lineal): eje(s) adelantado(s) + cluster trasero.
+  const rearClusterCount = totalAxles <= 2 ? totalAxles : Math.min(3, totalAxles - 1);
+  const frontCount = totalAxles - rearClusterCount;
+
+  // El lado donde se acopla el tracto depende del side actual.
+  const tractorAtRear = TRAILER_ATTACH_SIDE === "rear";
+  const tractorSideZ = tractorAtRear ? -depth / 2 : depth / 2;
+  const awayFromTractor = tractorAtRear ? 1 : -1;
+  const fromTractor = (distance: number) =>
+    clamp(tractorSideZ + awayFromTractor * distance, minZ, maxZ);
+
+  const frontStartDist = usableDepth * 0.16;
+  const frontEndDist = usableDepth * 0.56;
+  const rearGap = Math.max(wheelRadius * 1.45, usableDepth * 0.05);
+  const rearStartDist = Math.max(frontEndDist + rearGap * 1.35, usableDepth * 0.72);
+
+  const frontZs =
+    frontCount <= 0
+      ? []
+      : frontCount === 1
+        ? [fromTractor(frontStartDist)]
+        : Array.from({ length: frontCount }, (_, i) => {
+            const t = i / Math.max(1, frontCount - 1);
+            return fromTractor(frontStartDist + t * (frontEndDist - frontStartDist));
+          });
+
+  const rearZs = Array.from({ length: rearClusterCount }, (_, i) =>
+    fromTractor(rearStartDist + i * rearGap)
+  );
+
+  const axleZs = [...frontZs, ...rearZs];
 
   return (
     <group>
