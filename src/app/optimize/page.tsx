@@ -51,6 +51,7 @@ type OptimizeVehicle = {
   internalWidth: number
   internalHeight: number
   maxWeight: number
+  axles?: number
   __raw?: any
 }
 
@@ -615,6 +616,7 @@ export default function OptimizePage() {
             internalWidth: Number(v.internalWidth ?? 0),
             internalHeight: Number(v.internalHeight ?? 0),
             maxWeight: Number(v.maxWeight ?? 0),
+            axles: Number(v.axles ?? 3),
             __raw: v,
           }))
           .filter(v => v.internalLength > 0 && v.internalWidth > 0 && v.internalHeight > 0)
@@ -1712,6 +1714,7 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
                           height: vehicle.internalHeight,
                           depth: vehicle.internalLength,
                         }}
+                        axleCount={vehicle.axles}
                         cubes={visualizerCubes}
                         onCubesChange={setVisualizerCubes}
                         onEditStatsChange={setManualEditStats}

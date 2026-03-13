@@ -87,6 +87,7 @@ type LoadPlan = {
     internalWidth: number
     internalHeight: number
     internalLength: number
+    axles?: number | null
     plate?: string | null
     licensePlate?: string | null
     unitNumber?: string | null
@@ -861,6 +862,7 @@ export default function LoadPlan3DViewPage() {
           <LoadVisualizer3D
             container={container}
             cubes={visualizerCubes}
+            axleCount={Number(plan.vehicle?.axles ?? 3)}
             focusCubeIds={Array.from(highlightResult.cubeIds)}
             focusToken={activeWarningHighlightKey}
             showControlPanel={false}

@@ -60,6 +60,7 @@ type LoadPlan = {
     internalWidth: number
     internalHeight: number
     internalLength: number
+    axles?: number | null
   } | null
   items: PlanItem[]
   placements?: PlanPlacement[]
@@ -421,6 +422,7 @@ export default function LoadPlanEditLayoutPage() {
           <LoadVisualizer3D
             container={container}
             cubes={activeCubes}
+            axleCount={Number(plan.vehicle?.axles ?? 3)}
             onCubesChange={setLayoutDraftCubes}
             onEditStatsChange={setLayoutEditStats}
           />

@@ -45,6 +45,7 @@ export type Cube3DData = {
 type Props = {
   container: Container3DProps;
   cubes: Cube3DData[];
+  axleCount?: number;
   totalWeightKg?: number;
   totalVolumeM3?: number;
   utilizationPercent?: number;
@@ -397,7 +398,7 @@ function ClampPan({
   return null;
 }
 
-function Container({ width, height, depth }: Container3DProps) {
+function Container({ width, height, depth, axleCount = 3 }: Container3DProps & { axleCount?: number }) {
   const cy = height / 2;
 
   const wallTexture = useLoader(THREE.TextureLoader, trailerWallImg.src);
@@ -446,11 +447,58 @@ function Container({ width, height, depth }: Container3DProps) {
         <meshStandardMaterial color="#E5E5E5" metalness={0.2} roughness={0.6} side={THREE.BackSide} />
       </mesh>
 
+      <TrailerAxles width={width} depth={depth} axleCount={axleCount} />
+
       {/* Wireframe edges */}
       <lineSegments position={[0, cy, 0]} renderOrder={10}>
         <edgesGeometry args={[new THREE.BoxGeometry(width, height, depth)]} />
         <lineBasicMaterial color="#1A1A1A" linewidth={2} depthTest={false} />
       </lineSegments>
+    </group>
+  );
+}
+
+function TrailerAxles({ width, depth, axleCount }: { width: number; depth: number; axleCount?: number }) {
+  const totalAxles = clamp(Math.round(finite(axleCount, 3)), 1, 9);
+  const wheelRadius = Math.max(6, Math.min(14, depth * 0.018));
+  const wheelThickness = Math.max(2.5, Math.min(6, width * 0.03));
+  const axleBeamRadius = Math.max(1, wheelThickness * 0.3);
+  const sideInset = wheelThickness * 0.9;
+  const wheelX = Math.max(0, width / 2 - sideInset);
+  const wheelY = -wheelRadius;
+  const axleSpacing = Math.max(wheelRadius * 1.4, depth * 0.04);
+  const firstAxleZ = -depth / 2 + Math.max(wheelRadius * 1.8, depth * 0.12);
+
+  const axleZs = Array.from({ length: totalAxles }, (_, i) => firstAxleZ + i * axleSpacing);
+
+  return (
+    <group>
+      {axleZs.map((z, i) => (
+        <group key={`axle-${i}`}>
+          <mesh position={[0, wheelY, z]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+            <cylinderGeometry args={[axleBeamRadius, axleBeamRadius, Math.max(1, width - sideInset * 1.6), 16]} />
+            <meshStandardMaterial color="#4B5563" metalness={0.65} roughness={0.35} />
+          </mesh>
+
+          <mesh position={[-wheelX, wheelY, z]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+            <cylinderGeometry args={[wheelRadius, wheelRadius, wheelThickness, 24]} />
+            <meshStandardMaterial color="#111827" roughness={0.9} />
+          </mesh>
+          <mesh position={[wheelX, wheelY, z]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+            <cylinderGeometry args={[wheelRadius, wheelRadius, wheelThickness, 24]} />
+            <meshStandardMaterial color="#111827" roughness={0.9} />
+          </mesh>
+
+          <mesh position={[-wheelX, wheelY, z]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+            <cylinderGeometry args={[wheelRadius * 0.45, wheelRadius * 0.45, wheelThickness + 0.1, 18]} />
+            <meshStandardMaterial color="#9CA3AF" metalness={0.75} roughness={0.3} />
+          </mesh>
+          <mesh position={[wheelX, wheelY, z]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+            <cylinderGeometry args={[wheelRadius * 0.45, wheelRadius * 0.45, wheelThickness + 0.1, 18]} />
+            <meshStandardMaterial color="#9CA3AF" metalness={0.75} roughness={0.3} />
+          </mesh>
+        </group>
+      ))}
     </group>
   );
 }
@@ -825,6 +873,7 @@ function InstancedCubeLayer({
 export default function LoadVisualizer3D({
   container,
   cubes,
+  axleCount,
   totalWeightKg,
   totalVolumeM3,
   utilizationPercent,
@@ -862,6 +911,10 @@ export default function LoadVisualizer3D({
   });
   const shouldEmitChangesRef = useRef(false);
   const effectiveEditMode = forceEditMode ?? editMode;
+  const normalizedAxleCount = useMemo(
+    () => clamp(Math.round(finite(axleCount, 3)), 1, 9),
+    [axleCount]
+  );
 
   const stopFocusAnimation = useCallback(() => {
     if (focusAnimRafRef.current !== null) {
@@ -1535,7 +1588,7 @@ export default function LoadVisualizer3D({
 
           <ReferenceGrid width={container.width} depth={container.depth} />
           <TrailerReferenceModel container={container} />
-          <Container {...container} />
+          <Container {...container} axleCount={normalizedAxleCount} />
 
           {renderedItems.length > 100 ? (
             <>
