@@ -584,7 +584,8 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
     if (!Number.isFinite(scale) || scale <= 0) return null;
 
     const attachFront = TRAILER_ATTACH_SIDE === "front";
-    const rotationY = attachFront ? Math.PI : 0;
+    // En "rear" queremos que el tractor apunte hacia el frente de la caja.
+    const rotationY = attachFront ? 0 : Math.PI;
     const hitchLocalZ = cargoBox.max.z;
     const hitchOffsetZ = (rotationY === Math.PI ? -hitchLocalZ : hitchLocalZ) * scale;
     const frontPlaneZ = container.depth / 2;
