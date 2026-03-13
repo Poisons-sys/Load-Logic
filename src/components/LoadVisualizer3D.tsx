@@ -530,7 +530,9 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
       position: [
         -center.x * scale,
         -cargoBox.min.y * scale,
-        -center.z * scale,
+        // Alinear el frente de la referencia con el frente del contenedor
+        // para que el tracto quede enganchado por fuera, no centrado dentro.
+        container.depth / 2 - cargoBox.max.z * scale,
       ] as [number, number, number],
     };
   }, [container.width, container.height, container.depth, trailerScene]);
