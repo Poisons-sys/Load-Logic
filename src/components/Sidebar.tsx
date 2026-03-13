@@ -102,7 +102,7 @@ export default function Sidebar({
 
       <div className={cn('border-t border-gray-800', collapsed ? 'p-2' : 'p-4')}>
         <div className={cn('text-xs text-gray-400', collapsed && 'text-center')}>
-          {!collapsed && <p>Load Logic v1.0</p>}
+          {!collapsed && <p>Load Logic</p>}
           <p className={cn(!collapsed && 'mt-1')}>(c) 2026</p>
         </div>
       </div>

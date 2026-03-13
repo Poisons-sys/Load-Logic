@@ -73,6 +73,7 @@ const SNAP_STEP = 1;
 const GAP = 2;
 const TRAILER_MODEL_URL = "/models/trailer.gltf";
 const TRAILER_HITCH_GAP = 0;
+const TRAILER_ATTACH_SIDE: "front" | "rear" = "front";
 
 function cloneCubes(input: Cube3DData[]) {
   return input.map((cube) => ({
@@ -582,14 +583,20 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
 
     if (!Number.isFinite(scale) || scale <= 0) return null;
 
+    const attachFront = TRAILER_ATTACH_SIDE === "front";
+    const rotationY = attachFront ? Math.PI : 0;
+    const zPosition = attachFront
+      ? -container.depth / 2 + sceneBox.min.z * scale - TRAILER_HITCH_GAP
+      : container.depth / 2 - sceneBox.min.z * scale + TRAILER_HITCH_GAP;
+
     return {
       scale,
+      rotationY,
       position: [
         -center.x * scale,
         -sceneBox.min.y * scale,
-        // Pegar la parte trasera del modelo al frente del contenedor
-        // para que el trailer de referencia quede fuera y enganchado.
-        container.depth / 2 - sceneBox.min.z * scale + TRAILER_HITCH_GAP,
+        // Permite cambiar explicitamente entre acople en frente o en rear.
+        zPosition,
       ] as [number, number, number],
     };
   }, [container.width, container.height, container.depth, trailerScene]);
@@ -597,7 +604,12 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
   if (!bind) return null;
 
   return (
-    <group position={bind.position} scale={[bind.scale, bind.scale, bind.scale]} renderOrder={-1}>
+    <group
+      position={bind.position}
+      rotation={[0, bind.rotationY, 0]}
+      scale={[bind.scale, bind.scale, bind.scale]}
+      renderOrder={-1}
+    >
       <primitive object={trailerScene} />
     </group>
   );
