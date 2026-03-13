@@ -347,6 +347,21 @@ function orderedIndices(length: number, order: 'asc' | 'desc') {
   return out
 }
 
+function centerOutIndices(length: number) {
+  if (length <= 0) return []
+  const center = Math.floor((length - 1) / 2)
+  const out: number[] = [center]
+
+  for (let offset = 1; out.length < length; offset++) {
+    const rear = center + offset
+    const front = center - offset
+    if (rear < length) out.push(rear)
+    if (front >= 0 && out.length < length) out.push(front)
+  }
+
+  return out
+}
+
 export class BinPacking3D {
   private readonly resolution = 10
   private container: { width: number; height: number; depth: number }
@@ -497,7 +512,8 @@ export class BinPacking3D {
         continue
       }
 
-      const zIndices = orderedIndices(stepsZ, this.tuning.zOrder)
+      const zIndices =
+        this.maxRouteStop <= 1 ? centerOutIndices(stepsZ) : orderedIndices(stepsZ, this.tuning.zOrder)
       const xIndices = orderedIndices(stepsX, this.tuning.xOrder)
 
       for (let y = 0; y < stepsY; y++) {
@@ -517,13 +533,24 @@ export class BinPacking3D {
 
             const routePenalty =
               this.routeDepthPenalty(item.routeStop, position.z, rotation.d) * this.tuning.routeWeight
-            const layerPenalty = y * 100 * this.tuning.layerWeight
+            const itemWeightRatio = clamp(item.weight / Math.max(1, this.maxWeight), 0, 1)
+            const heavyLiftPenaltyFactor = 1 + itemWeightRatio * 4
+            const layerPenalty = y * 100 * this.tuning.layerWeight * heavyLiftPenaltyFactor
             const xBias = this.tuning.xOrder === 'asc' ? x : stepsX - 1 - x
             const lateralPenalty = xBias * this.tuning.lateralWeight
+            const centerZ = position.z + rotation.d / 2
+            const normalizedLongitudinalOffset =
+              this.container.depth > 0 ? Math.abs(centerZ / this.container.depth - 0.5) * 2 : 0
+            const longitudinalRiskPenalty = normalizedLongitudinalOffset * item.weight * 50
             const hashed = ((x + 1) * 73856093) ^ ((y + 1) * 19349663) ^ ((z + 1) * 83492791)
             const jitter =
               (Math.abs(hashed % 1000) / 1000) * this.tuning.tieBreakerJitter
-            const score = routePenalty * 1_000_000 + layerPenalty * 1_000 + lateralPenalty + jitter
+            const score =
+              routePenalty * 1_000_000 +
+              layerPenalty * 1_000 +
+              longitudinalRiskPenalty +
+              lateralPenalty +
+              jitter
             if (score < bestScore) {
               bestScore = score
               best = evaluation.candidate
@@ -540,17 +567,20 @@ export class BinPacking3D {
   }
 
   private routeDepthPenalty(routeStop: number, z: number, depth: number): number {
+    const centerZ = z + depth / 2
+
+    if (this.maxRouteStop <= 1) {
+      const targetCenter = this.container.depth * 0.5
+      return Math.abs(centerZ - targetCenter)
+    }
+
     const usableDepth = Math.max(this.container.depth - depth, 0)
     if (usableDepth <= 0) return 0
 
-    if (this.maxRouteStop <= 1) {
-      return z
-    }
-
     // stop 1 should stay near doors (rear, larger z), later stops toward front.
     const normalizedStop = clamp((routeStop - 1) / (this.maxRouteStop - 1), 0, 1)
-    const desiredZ = (1 - normalizedStop) * usableDepth
-    return Math.abs(z - desiredZ)
+    const desiredCenterZ = (1 - normalizedStop) * usableDepth + depth / 2
+    return Math.abs(centerZ - desiredCenterZ)
   }
 
   private evaluatePlacement(

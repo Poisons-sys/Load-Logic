@@ -370,6 +370,38 @@ test('intelligent usa 4 escenarios para optimizacion grande', async () => {
   assert.equal(result.ai?.candidatesEvaluated, 4)
 })
 
+test('intelligent evita sobrecargar eje frontal cuando todo va en parada unica', async () => {
+  const vehicle = makeVehicle({
+    internalLength: 1360,
+    internalWidth: 245,
+    internalHeight: 260,
+    maxWeight: 32_000,
+    frontAxleMaxWeight: 7_000,
+    rearAxleMaxWeight: 17_000,
+    axles: 3,
+  })
+  const heavy = makeProduct('p-axle-safe', {
+    length: 120,
+    width: 100,
+    height: 120,
+    weight: 650,
+    stackable: true,
+    maxStackHeight: 2,
+  })
+
+  const result = await optimizeLoad(
+    [{ product: heavy, quantity: 12, routeStop: 1 }],
+    vehicle,
+    { strategy: 'intelligent', seed: 9012 }
+  )
+
+  assert.equal(result.axleDistribution.frontOverKg <= 0.1, true)
+  assert.equal(
+    result.validations.some((issue) => issue.code === 'AXLE_OVERLOAD'),
+    false
+  )
+})
+
 test('baseline asienta alturas no multiples de resolucion sin crear gap', async () => {
   const vehicle = makeVehicle({
     internalLength: 120,
