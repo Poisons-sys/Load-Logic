@@ -530,7 +530,9 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
         cloned.opacity = 1;
         cloned.depthWrite = true;
         cloned.depthTest = true;
-        cloned.side = THREE.FrontSide;
+        // Este GLTF trae algunas caras con normales invertidas.
+        // DoubleSide evita huecos visuales en un lateral del tractor.
+        cloned.side = THREE.DoubleSide;
         return cloned;
       });
 
