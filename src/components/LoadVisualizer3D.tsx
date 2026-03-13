@@ -71,7 +71,7 @@ export type LayoutEditStats = {
 
 const SNAP_STEP = 1;
 const GAP = 2;
-const TRAILER_MODEL_URL = "/models/trailer.gltf";
+const TRAILER_MODEL_URL = "/models/trailer.gltf?v=20260313-2";
 const TRAILER_HITCH_GAP = 0;
 const TRAILER_ATTACH_SIDE: "front" | "rear" = "front";
 
@@ -585,9 +585,14 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
 
     const attachFront = TRAILER_ATTACH_SIDE === "front";
     const rotationY = attachFront ? Math.PI : 0;
-    const zPosition = attachFront
-      ? -container.depth / 2 + sceneBox.min.z * scale - TRAILER_HITCH_GAP
-      : container.depth / 2 - sceneBox.min.z * scale + TRAILER_HITCH_GAP;
+    const hitchLocalZ = cargoBox.max.z;
+    const hitchOffsetZ = (rotationY === Math.PI ? -hitchLocalZ : hitchLocalZ) * scale;
+    const frontPlaneZ = container.depth / 2;
+    const rearPlaneZ = -container.depth / 2;
+    const targetHitchZ = attachFront
+      ? frontPlaneZ + TRAILER_HITCH_GAP
+      : rearPlaneZ - TRAILER_HITCH_GAP;
+    const zPosition = targetHitchZ - hitchOffsetZ;
 
     return {
       scale,
@@ -595,7 +600,7 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
       position: [
         -center.x * scale,
         -sceneBox.min.y * scale,
-        // Permite cambiar explicitamente entre acople en frente o en rear.
+        // Anclar por punto de enganche real (hitch) evita invertir frente/rear.
         zPosition,
       ] as [number, number, number],
     };
