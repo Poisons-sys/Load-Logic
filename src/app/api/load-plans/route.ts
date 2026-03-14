@@ -4,6 +4,7 @@ import { activityLogs, loadPlanItems, loadPlans, products, vehicles } from '@/db
 import { eq, and, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
 import { createLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
+import { isVehicleNom012Compliant } from '@/lib/nom012'
 
 // GET - Listar todos los planes de carga
 export async function GET(request: NextRequest) {
@@ -191,7 +192,7 @@ export async function POST(request: NextRequest) {
           weightDistribution: { front: 0, center: 0, rear: 0 },
           status: 'pendiente',
           nom002Compliant: true,
-          nom012Compliant: vehicle.nom012Compliant,
+          nom012Compliant: isVehicleNom012Compliant(vehicle),
           nom015Compliant: true,
           companyId: auth.companyId,
           createdBy: auth.userId,

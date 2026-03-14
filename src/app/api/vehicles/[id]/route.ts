@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { vehicles } from '@/db/schema'
 import { eq, and } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
+import { isVehicleNom012Compliant } from '@/lib/nom012'
 
 // GET - Obtener vehículo por ID
 export async function GET(
@@ -29,7 +30,10 @@ export async function GET(
 
     return NextResponse.json({
       success: true,
-      data: vehicle,
+      data: {
+        ...vehicle,
+        nom012Compliant: isVehicleNom012Compliant(vehicle),
+      },
     })
   } catch (error) {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
@@ -79,7 +83,6 @@ export async function PUT(
       axles,
       frontAxleMaxWeight,
       rearAxleMaxWeight,
-      nom012Compliant,
       nom068Compliant,
       hazardousMaterialAuthorized,
       isActive,
@@ -103,23 +106,25 @@ export async function PUT(
     }
 
     // Recalcular volumen si cambiaron las dimensiones
-    const newLength = internalLength || existingVehicle.internalLength
-    const newWidth = internalWidth || existingVehicle.internalWidth
-    const newHeight = internalHeight || existingVehicle.internalHeight
+    const newLength = internalLength ?? existingVehicle.internalLength
+    const newWidth = internalWidth ?? existingVehicle.internalWidth
+    const newHeight = internalHeight ?? existingVehicle.internalHeight
     const maxVolume = (newLength * newWidth * newHeight) / 1000000
 
-    // Validar NOM-012 si cambió el peso o ejes
-    const newAxles = axles || existingVehicle.axles
-    const newMaxWeight = maxWeight || existingVehicle.maxWeight
-    const maxWeightsByAxles: Record<number, number> = {
-      2: 17000, 3: 26000, 4: 36000, 5: 43000, 6: 48000, 7: 50000, 8: 52000, 9: 54000,
-    }
-    const isNom012Compliant = newMaxWeight <= (maxWeightsByAxles[newAxles] || 36000)
+    const newType = type ?? existingVehicle.type
+    const newAxles = Number(axles ?? existingVehicle.axles)
+    const newMaxWeight = Number(maxWeight ?? existingVehicle.maxWeight)
+    const isNom012Compliant = isVehicleNom012Compliant({
+      type: newType,
+      axles: newAxles,
+      maxWeight: newMaxWeight,
+      internalLength: newLength,
+    })
 
     const [updatedVehicle] = await db.update(vehicles)
       .set({
         name: name || existingVehicle.name,
-        type: type || existingVehicle.type,
+        type: newType,
         plateNumber: plateNumber ? plateNumber.toUpperCase() : existingVehicle.plateNumber,
         internalLength: newLength,
         internalWidth: newWidth,
@@ -132,7 +137,7 @@ export async function PUT(
         axles: newAxles,
         frontAxleMaxWeight: frontAxleMaxWeight || existingVehicle.frontAxleMaxWeight,
         rearAxleMaxWeight: rearAxleMaxWeight || existingVehicle.rearAxleMaxWeight,
-        nom012Compliant: nom012Compliant !== undefined ? nom012Compliant : isNom012Compliant,
+        nom012Compliant: isNom012Compliant,
         nom068Compliant: nom068Compliant !== undefined ? nom068Compliant : existingVehicle.nom068Compliant,
         hazardousMaterialAuthorized: hazardousMaterialAuthorized !== undefined ? hazardousMaterialAuthorized : existingVehicle.hazardousMaterialAuthorized,
         isActive: isActive !== undefined ? isActive : existingVehicle.isActive,

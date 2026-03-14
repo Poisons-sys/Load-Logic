@@ -13,6 +13,7 @@ import {
 import { requireAuth } from '@/lib/auth-server'
 import { optimizeLoad } from '@/lib/optimization'
 import { updateLoadPlanSchema, zodErrorMessage } from '@/lib/validation/load-plans'
+import { isVehicleNom012Compliant } from '@/lib/nom012'
 
 type NullsToUndefined<T> = {
   [K in keyof T]:
@@ -235,7 +236,7 @@ export async function PUT(
           advancedMetrics: hasStructuralChange ? null : existingLoadPlan.advancedMetrics,
           optimizationScore: hasStructuralChange ? 0 : existingLoadPlan.optimizationScore,
           layoutVersion: hasStructuralChange ? 1 : existingLoadPlan.layoutVersion,
-          nom012Compliant: Boolean(vehicle.nom012Compliant),
+          nom012Compliant: isVehicleNom012Compliant(vehicle),
           updatedAt: new Date(),
         })
         .where(and(eq(loadPlans.id, id), eq(loadPlans.companyId, auth.companyId)))

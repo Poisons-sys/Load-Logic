@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { vehicles, loadPlans, userAlertReads } from '@/db/schema'
 import { and, desc, eq, inArray, lt } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
+import { isVehicleNom012Compliant } from '@/lib/nom012'
 
 type Alert = {
   id: string
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
           vehicle: `${v.name} (${v.plateNumber})`,
         })
       }
-      if (v.nom012Compliant === false) {
+      if (!isVehicleNom012Compliant(v)) {
         alerts.push({
           id: `veh-nom012-${v.id}`,
           type: 'warning',

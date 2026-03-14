@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { vehicles } from '@/db/schema'
 import { eq, and, like, desc } from 'drizzle-orm'
 import { requireAuth } from '@/lib/auth-server'
+import { isVehicleNom012Compliant } from '@/lib/nom012'
 
 // GET - Listar todos los vehículos
 export async function GET(request: NextRequest) {
@@ -37,10 +38,15 @@ export async function GET(request: NextRequest) {
       orderBy: desc(vehicles.createdAt),
     })
 
+    const normalizedVehicles = allVehicles.map((vehicle) => ({
+      ...vehicle,
+      nom012Compliant: isVehicleNom012Compliant(vehicle),
+    }))
+
     return NextResponse.json({
       success: true,
-      data: allVehicles,
-      count: allVehicles.length,
+      data: normalizedVehicles,
+      count: normalizedVehicles.length,
     })
   } catch (error) {
     if (error instanceof Error && error.message === 'UNAUTHORIZED') {
@@ -71,7 +77,6 @@ export async function POST(request: NextRequest) {
       axles,
       frontAxleMaxWeight,
       rearAxleMaxWeight,
-      nom012Compliant,
       nom068Compliant,
       hazardousMaterialAuthorized,
     } = body
@@ -102,20 +107,13 @@ export async function POST(request: NextRequest) {
     // Calcular volumen máximo
     const maxVolume = (internalLength * internalWidth * internalHeight) / 1000000 // en m³
 
-    // Validar NOM-012 según número de ejes
-    const axlesCount = axles || 2
-    const maxWeightsByAxles: Record<number, number> = {
-      2: 17000,
-      3: 26000,
-      4: 36000,
-      5: 43000,
-      6: 48000,
-      7: 50000,
-      8: 52000,
-      9: 54000,
-    }
-
-    const isNom012Compliant = maxWeight <= (maxWeightsByAxles[axlesCount] || 36000)
+    const axlesCount = Number(axles ?? 2)
+    const isNom012Compliant = isVehicleNom012Compliant({
+      type,
+      axles: axlesCount,
+      maxWeight,
+      internalLength,
+    })
 
     const [newVehicle] = await db.insert(vehicles)
       .values({
@@ -133,7 +131,7 @@ export async function POST(request: NextRequest) {
         axles: axlesCount,
         frontAxleMaxWeight: frontAxleMaxWeight || 7000,
         rearAxleMaxWeight: rearAxleMaxWeight || 17000,
-        nom012Compliant: nom012Compliant !== undefined ? nom012Compliant : isNom012Compliant,
+        nom012Compliant: isNom012Compliant,
         nom068Compliant: nom068Compliant !== undefined ? nom068Compliant : true,
         hazardousMaterialAuthorized: hazardousMaterialAuthorized || false,
         companyId: auth.companyId,
