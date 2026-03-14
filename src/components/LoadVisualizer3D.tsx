@@ -487,28 +487,31 @@ function TrailerAxles({
 
   // El lado donde se acopla el tracto depende del side actual.
   const tractorAtRear = TRAILER_ATTACH_SIDE === "rear";
-  const tractorSideZ = tractorAtRear ? -depth / 2 : depth / 2;
-  const awayFromTractor = tractorAtRear ? 1 : -1;
-  const fromTractor = (distance: number) =>
-    clamp(tractorSideZ + awayFromTractor * distance, minZ, maxZ);
+  const fromTractorRatio = (t: number) => {
+    const clampedT = clamp(t, 0, 1);
+    return tractorAtRear
+      ? THREE.MathUtils.lerp(minZ, maxZ, clampedT)
+      : THREE.MathUtils.lerp(maxZ, minZ, clampedT);
+  };
 
-  const frontStartDist = usableDepth * 0.16;
-  const frontEndDist = usableDepth * 0.56;
-  const rearGap = Math.max(wheelRadius * 1.45, usableDepth * 0.05);
-  const rearStartDist = Math.max(frontEndDist + rearGap * 1.35, usableDepth * 0.72);
+  const frontStartT = 0.16;
+  const frontEndT = 0.48;
+  const rearGapT = clamp((wheelRadius * 1.45) / usableDepth, 0.045, 0.075);
+  const rearBaseT = frontCount > 0 ? 0.76 : 0.84;
+  const rearStartT = clamp(rearBaseT - Math.max(0, rearClusterCount - 3) * 0.05, 0.62, 0.9);
 
   const frontZs =
     frontCount <= 0
       ? []
       : frontCount === 1
-        ? [fromTractor(frontStartDist)]
+        ? [fromTractorRatio(frontStartT)]
         : Array.from({ length: frontCount }, (_, i) => {
             const t = i / Math.max(1, frontCount - 1);
-            return fromTractor(frontStartDist + t * (frontEndDist - frontStartDist));
+            return fromTractorRatio(frontStartT + t * (frontEndT - frontStartT));
           });
 
   const rearZs = Array.from({ length: rearClusterCount }, (_, i) =>
-    fromTractor(rearStartDist + i * rearGap)
+    fromTractorRatio(rearStartT + i * rearGapT)
   );
 
   const axleZs = [...frontZs, ...rearZs];
