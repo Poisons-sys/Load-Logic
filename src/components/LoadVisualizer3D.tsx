@@ -447,7 +447,7 @@ function Container({ width, height, depth, axleCount = 3 }: Container3DProps & {
         <meshStandardMaterial color="#E5E5E5" metalness={0.2} roughness={0.6} side={THREE.BackSide} />
       </mesh>
 
-      <TrailerAxles width={width} depth={depth} axleCount={axleCount} />
+      <TrailerAxles width={width} height={height} depth={depth} axleCount={axleCount} />
 
       {/* Wireframe edges */}
       <lineSegments position={[0, cy, 0]} renderOrder={10}>
@@ -458,12 +458,22 @@ function Container({ width, height, depth, axleCount = 3 }: Container3DProps & {
   );
 }
 
-function TrailerAxles({ width, depth, axleCount }: { width: number; depth: number; axleCount?: number }) {
+function TrailerAxles({
+  width,
+  height,
+  depth,
+  axleCount,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+  axleCount?: number;
+}) {
   const totalAxles = clamp(Math.round(finite(axleCount, 3)), 1, 9);
-  const wheelRadius = Math.max(6, Math.min(14, depth * 0.018));
-  const wheelThickness = Math.max(2.5, Math.min(6, width * 0.03));
-  const axleBeamRadius = Math.max(1, wheelThickness * 0.3);
-  const sideInset = wheelThickness * 0.9;
+  const wheelRadius = clamp(height * 0.2, 20, 54);
+  const wheelThickness = clamp(width * 0.075, 8, 20);
+  const axleBeamRadius = clamp(wheelRadius * 0.12, 2, 8);
+  const sideInset = wheelThickness * 0.65;
   const wheelX = Math.max(0, width / 2 - sideInset);
   const wheelY = -wheelRadius;
   const axleMargin = Math.max(wheelRadius * 1.8, depth * 0.09);
