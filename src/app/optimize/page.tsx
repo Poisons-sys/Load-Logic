@@ -1183,6 +1183,14 @@ export default function OptimizePage() {
   // Convertir resultado a formato para visualizador 3D
 const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
   const placed = optimizationResult?.placedItems ?? []
+  const instructions = optimizationResult?.instructions ?? []
+  const zoneByInstanceId = new Map<string, 'front' | 'center' | 'rear'>()
+  instructions.forEach((ins: any) => {
+    const iid = String(ins?.instanceId ?? '')
+    const zone = ins?.loadingZone as 'front' | 'center' | 'rear' | undefined
+    if (!iid || !zone) return
+    zoneByInstanceId.set(iid, zone)
+  })
   const out: Cube3DData[] = []
 
   placed.forEach((item: any, idx: number) => {
@@ -1205,6 +1213,7 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
     for (let q = 0; q < qty; q++) {
       const baseInstanceId = String(item.instanceId ?? `${item.product?.id ?? "p"}-${idx}`)
       const instanceId = qty > 1 ? `${baseInstanceId}-${q + 1}` : baseInstanceId
+      const zoneFromInstruction = zoneByInstanceId.get(instanceId) ?? zoneByInstanceId.get(baseInstanceId)
       out.push({
         id: instanceId,
         instanceId,
@@ -1216,7 +1225,7 @@ const cubesForVisualizer = useMemo<Cube3DData[]>(() => {
         depth: d,
         rotY,
         routeStop: Number(item.routeStop ?? 1),
-        loadingZone: undefined,
+        loadingZone: (item.loadingZone ?? zoneFromInstruction ?? undefined) as 'front' | 'center' | 'rear' | undefined,
         color: getCategoryColor(item.product?.category ?? "generales"),
         name: String(item.product?.name ?? "Producto"),
         weightKg: Number(item.product?.weight ?? 0),

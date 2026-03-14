@@ -342,55 +342,192 @@ function settleByGravity(input: Cube3DData[], container: Container3DProps) {
 }
 
 /**
- *  EasyCargo-style pero "hasta atrás" (al frente del trailer):
- * - Empieza pegado al frente: x = container.depth - boxDepth
- * - Llena el ancho (z) por filas
- * - Cuando no cabe en z, crea nueva fila "hacia las puertas" (x disminuye)
- * - Respeta rotación real vía effectiveFootprint()
+ * Balanced local packer:
+ * - Splits depth into rear/center/front zones
+ * - Spreads load by weight proxy across zones
+ * - Alternates left/right inside each zone to reduce lateral bias
+ * - Honors loadingZone when provided by intelligent strategy
  */
 function packEasyCargoRows(input: Cube3DData[], container: Container3DProps) {
-  const out: Cube3DData[] = []
+  type LongZone = "front" | "center" | "rear";
+  type ZoneState = {
+    zone: LongZone;
+    startX: number;
+    endX: number;
+    rowOffset: number;
+    rowMaxD: number;
+    leftZ: number;
+    rightZ: number;
+    leftLoad: number;
+    rightLoad: number;
+    totalLoad: number;
+  };
 
-  let z = 0                 // lateral (0 = pared izquierda)
-  let rowMaxD = 0           // profundidad máxima (avance) en esta fila
-  let rowOffset = 0         // cuánto hemos avanzado desde el frente hacia las puertas
+  const cubeMassScore = (cube: Cube3DData) => {
+    const weight = Math.max(0, finite(cube.weightKg, finite(cube.weight, 0)));
+    const volume = Math.max(1, cube.width * cube.height * cube.depth);
+    return weight > 0 ? weight : volume * 0.00035;
+  };
 
-  for (const raw of input) {
-    let c = clampCubeInsideContainer(normalizeCubeXYZ(raw, container), container)
-    c = { ...c, y: 0 }
+  const zonesOrder: LongZone[] = ["rear", "center", "front"];
+  const third = container.depth / 3;
+  const zoneState: Record<LongZone, ZoneState> = {
+    rear: {
+      zone: "rear",
+      startX: 0,
+      endX: third,
+      rowOffset: 0,
+      rowMaxD: 0,
+      leftZ: 0,
+      rightZ: container.width,
+      leftLoad: 0,
+      rightLoad: 0,
+      totalLoad: 0,
+    },
+    center: {
+      zone: "center",
+      startX: third,
+      endX: third * 2,
+      rowOffset: 0,
+      rowMaxD: 0,
+      leftZ: 0,
+      rightZ: container.width,
+      leftLoad: 0,
+      rightLoad: 0,
+      totalLoad: 0,
+    },
+    front: {
+      zone: "front",
+      startX: third * 2,
+      endX: container.depth,
+      rowOffset: 0,
+      rowMaxD: 0,
+      leftZ: 0,
+      rightZ: container.width,
+      leftLoad: 0,
+      rightLoad: 0,
+      totalLoad: 0,
+    },
+  };
 
-    const fp = effectiveFootprint(c)
+  const out: Cube3DData[] = [];
+  const sorted = [...input]
+    .map((raw) => clampCubeInsideContainer(normalizeCubeXYZ(raw, container), container))
+    .sort((a, b) => {
+      const massDelta = cubeMassScore(b) - cubeMassScore(a);
+      if (Math.abs(massDelta) > 0.0001) return massDelta;
+      const volA = a.width * a.height * a.depth;
+      const volB = b.width * b.height * b.depth;
+      return volB - volA;
+    });
 
-    // Si no cabe en el ancho -> nueva fila
-    if (z + fp.w > container.width) {
-      z = 0
-      rowOffset += rowMaxD + GAP
-      rowMaxD = 0
+  const tryPlaceInZone = (cube: Cube3DData, zoneName: LongZone) => {
+    const zone = zoneState[zoneName];
+    const fp = effectiveFootprint(cube);
+    const zoneDepth = Math.max(1, zone.endX - zone.startX);
+
+    let rowOffset = zone.rowOffset;
+    let rowMaxD = zone.rowMaxD;
+    let leftZ = zone.leftZ;
+    let rightZ = zone.rightZ;
+    let leftLoad = zone.leftLoad;
+    let rightLoad = zone.rightLoad;
+
+    const beginNextRowIfNeeded = () => {
+      rowOffset += rowMaxD + GAP;
+      rowMaxD = 0;
+      leftZ = 0;
+      rightZ = container.width;
+    };
+
+    if (leftZ + fp.w > rightZ + 0.001) {
+      beginNextRowIfNeeded();
     }
 
-    // Si ya no cabe en el largo total -> clamp y seguimos (o break si prefieres)
-    if (rowOffset + fp.d > container.depth) {
-      const xClamped = 0
-      c = clampCubeInsideContainer({ ...c, x: xClamped, z, y: 0 }, container)
-      out.push({ ...c, x: snap(c.x), y: 0, z: snap(c.z) })
-      continue
+    if (rowOffset + fp.d > zoneDepth + 0.001) return null;
+
+    const preferLeft = leftLoad <= rightLoad;
+    const sideOrder: Array<"left" | "right"> = preferLeft ? ["left", "right"] : ["right", "left"];
+    let placedZ: number | null = null;
+    let side: "left" | "right" | null = null;
+
+    for (const candidate of sideOrder) {
+      if (candidate === "left") {
+        if (leftZ + fp.w <= rightZ + 0.001) {
+          placedZ = leftZ;
+          side = "left";
+          break;
+        }
+      } else if (rightZ - fp.w >= leftZ - 0.001) {
+        placedZ = rightZ - fp.w;
+        side = "right";
+        break;
+      }
     }
 
-    // CLAVE: colocar pegado al frente
-    // "Frente" = x máximo posible dentro del contenedor para esta fila
-    const x = rowOffset
+    if (placedZ === null || side === null) {
+      beginNextRowIfNeeded();
+      if (rowOffset + fp.d > zoneDepth + 0.001) return null;
+      if (fp.w > container.width + 0.001) return null;
+      if (leftLoad <= rightLoad) {
+        placedZ = 0;
+        side = "left";
+      } else {
+        placedZ = container.width - fp.w;
+        side = "right";
+      }
+    }
 
-    c = clampCubeInsideContainer({ ...c, x, z, y: 0 }, container)
-    c = { ...c, x: snap(c.x), y: 0, z: snap(c.z) }
+    const x = zone.startX + rowOffset;
+    const next = clampCubeInsideContainer({ ...cube, x, y: 0, z: placedZ }, container);
+    const mass = cubeMassScore(cube);
+    rowMaxD = Math.max(rowMaxD, fp.d);
 
-    out.push(c)
+    if (side === "left") {
+      leftZ = placedZ + fp.w + GAP;
+      leftLoad += mass;
+    } else {
+      rightZ = placedZ - GAP;
+      rightLoad += mass;
+    }
 
-    // avanzar en z dentro de la fila
-    z = z + fp.w + GAP
-    rowMaxD = Math.max(rowMaxD, fp.d)
+    zoneState[zoneName] = {
+      ...zone,
+      rowOffset,
+      rowMaxD,
+      leftZ,
+      rightZ,
+      leftLoad,
+      rightLoad,
+      totalLoad: zone.totalLoad + mass,
+    };
+
+    return { ...next, x: snap(next.x), y: 0, z: snap(next.z) };
+  };
+
+  for (const cube of sorted) {
+    const preferred = cube.loadingZone;
+    const fallbackZones = [...zonesOrder].sort((a, b) => zoneState[a].totalLoad - zoneState[b].totalLoad);
+    const candidates = preferred
+      ? [preferred, ...fallbackZones.filter((z) => z !== preferred)]
+      : fallbackZones;
+
+    let placed: Cube3DData | null = null;
+    for (const zone of candidates) {
+      placed = tryPlaceInZone(cube, zone);
+      if (placed) break;
+    }
+
+    if (!placed) {
+      const fallback = clampCubeInsideContainer({ ...cube, x: 0, y: 0, z: 0 }, container);
+      out.push({ ...fallback, x: snap(fallback.x), y: 0, z: snap(fallback.z) });
+      continue;
+    }
+
+    out.push(placed);
   }
 
-  return autoResolveOverlaps(out, container)
+  return autoResolveOverlaps(out, container);
 }
 
 function ClampPan({
@@ -1241,8 +1378,26 @@ export default function LoadVisualizer3D({
     const hasExplicitLayout = normalized.some(
       (c) => Math.abs(c.x) > 0.001 || Math.abs(c.y) > 0.001 || Math.abs(c.z) > 0.001
     );
+    const hasCollapsedExplicitLayout = (() => {
+      if (normalized.length < 5) return false;
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minZ = Number.POSITIVE_INFINITY;
+      let maxZ = Number.NEGATIVE_INFINITY;
+      for (const c of normalized) {
+        const fp = effectiveFootprint(c);
+        minX = Math.min(minX, c.x);
+        maxX = Math.max(maxX, c.x + fp.d);
+        minZ = Math.min(minZ, c.z);
+        maxZ = Math.max(maxZ, c.z + fp.w);
+      }
+      const spanX = Math.max(0, maxX - minX);
+      const spanZ = Math.max(0, maxZ - minZ);
+      // If payload spans too little of the trailer footprint, rebalance with local packer.
+      return spanX < containerBounds.depth * 0.35 && spanZ < containerBounds.width * 0.7;
+    })();
 
-    if (hasExplicitLayout) {
+    if (hasExplicitLayout && !hasCollapsedExplicitLayout) {
       setItems(settleByGravity(normalized, containerBounds));
       return;
     }
@@ -2034,3 +2189,4 @@ export default function LoadVisualizer3D({
 }
 
 useGLTF.preload(TRAILER_MODEL_URL);
+
