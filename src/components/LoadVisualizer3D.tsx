@@ -74,7 +74,32 @@ const SNAP_STEP = 1;
 const GAP = 2;
 const TRAILER_MODEL_URL = "/models/trailer.gltf?v=20260313-2";
 const TRAILER_HITCH_GAP = 0;
+// Distancia del acople (quinta rueda) medida desde la cola del tracto, en ratio del largo total del modelo.
+const TRAILER_HITCH_FROM_REAR_RATIO = 0.24;
+// Altura aproximada de la quinta rueda en el modelo (ratio vertical del bounding box).
+const TRAILER_HITCH_HEIGHT_RATIO = 0.29;
+// Altura objetivo del acople respecto al piso interno de la caja (y=0).
+// Valor negativo deja la plataforma justo por debajo del piso de la caja.
+const TRAILER_HITCH_TARGET_Y = -1;
+// Escala de llantas del remolque calibrada para verse del mismo tamano visual que el tracto.
+const TRAILER_AXLE_WHEEL_RADIUS_RATIO = 0.125;
+const TRAILER_AXLE_WHEEL_THICKNESS_RATIO = 0.06;
 const TRAILER_ATTACH_SIDE: "front" | "rear" = "rear";
+// Eje extra para dejar el tracto en configuracion de 3 ejes (1 direccional + 2 tractivos).
+const TRACTOR_THIRD_AXLE_LOCAL_Z = -6.45;
+const TRACTOR_THIRD_AXLE_LOCAL_Y = 0.54;
+const TRACTOR_THIRD_AXLE_HALF_TRACK = 1.10;
+const TRACTOR_THIRD_AXLE_WHEEL_RADIUS = 0.52;
+const TRACTOR_THIRD_AXLE_WHEEL_THICKNESS = 0.28;
+const TRACTOR_RIM_MAIN_COLOR = "#9CA3AF";
+const TRACTOR_RIM_HUB_COLOR = "#A8AFBA";
+const TRACTOR_RIM_CAP_COLOR = "#7B8594";
+const TRACTOR_RIM_MAIN_METALNESS = 0.25;
+const TRACTOR_RIM_MAIN_ROUGHNESS = 0.52;
+const TRACTOR_RIM_HUB_METALNESS = 0.2;
+const TRACTOR_RIM_HUB_ROUGHNESS = 0.58;
+const TRACTOR_RIM_CAP_METALNESS = 0.15;
+const TRACTOR_RIM_CAP_ROUGHNESS = 0.62;
 
 function cloneCubes(input: Cube3DData[]) {
   return input.map((cube) => ({
@@ -470,8 +495,8 @@ function TrailerAxles({
   axleCount?: number;
 }) {
   const totalAxles = clamp(Math.round(finite(axleCount, 3)), 1, 9);
-  const wheelRadius = clamp(height * 0.2, 20, 54);
-  const wheelThickness = clamp(width * 0.075, 8, 20);
+  const wheelRadius = clamp(height * TRAILER_AXLE_WHEEL_RADIUS_RATIO, 16, 40);
+  const wheelThickness = clamp(width * TRAILER_AXLE_WHEEL_THICKNESS_RATIO, 6, 16);
   const axleBeamRadius = clamp(wheelRadius * 0.12, 2, 8);
   const sideInset = wheelThickness * 0.65;
   const wheelX = Math.max(0, width / 2 - sideInset);
@@ -496,9 +521,13 @@ function TrailerAxles({
 
   const frontStartT = 0.16;
   const frontEndT = 0.48;
-  const rearGapT = clamp((wheelRadius * 1.45) / usableDepth, 0.045, 0.075);
-  const rearBaseT = frontCount > 0 ? 0.76 : 0.84;
-  const rearStartT = clamp(rearBaseT - Math.max(0, rearClusterCount - 3) * 0.05, 0.62, 0.9);
+  // Evitar que las llantas de ejes consecutivos se vean encimadas en vista lateral.
+  const minAxlePitch = wheelRadius * 2.25;
+  const desiredRearPitch = Math.max(minAxlePitch, depth * 0.065);
+  const rearGapT = clamp(desiredRearPitch / usableDepth, 0.08, 0.16);
+  const rearSpanT = rearGapT * Math.max(0, rearClusterCount - 1);
+  const rearAnchorT = frontCount > 0 ? 0.92 : 0.95;
+  const rearStartT = clamp(rearAnchorT - rearSpanT, 0.58, 0.94);
 
   const frontZs =
     frontCount <= 0
@@ -603,6 +632,90 @@ function resolveTrailerCargoBounds(root: THREE.Object3D) {
   return resolveTrailerSceneBounds(root);
 }
 
+function TractorThirdAxleVisual() {
+  const wheelRadius = TRACTOR_THIRD_AXLE_WHEEL_RADIUS;
+  const wheelThickness = TRACTOR_THIRD_AXLE_WHEEL_THICKNESS;
+  const halfTrack = TRACTOR_THIRD_AXLE_HALF_TRACK;
+  const wheelY = TRACTOR_THIRD_AXLE_LOCAL_Y;
+  const wheelZ = TRACTOR_THIRD_AXLE_LOCAL_Z;
+  const beamRadius = Math.max(0.03, wheelRadius * 0.13);
+  const beamLength = Math.max(0.2, halfTrack * 2 - wheelThickness * 1.4);
+  const rimRadius = wheelRadius * 0.62;
+  const hubRadius = wheelRadius * 0.38;
+  const capRadius = wheelRadius * 0.2;
+  const rimThickness = wheelThickness + 0.02;
+  const capThickness = wheelThickness + 0.04;
+
+  return (
+    <group renderOrder={-1}>
+      <mesh position={[0, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[beamRadius, beamRadius, beamLength, 16]} />
+        <meshStandardMaterial color="#4B5563" metalness={0.65} roughness={0.35} />
+      </mesh>
+
+      <mesh position={[-halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[wheelRadius, wheelRadius, wheelThickness, 24]} />
+        <meshStandardMaterial color="#111827" roughness={0.9} />
+      </mesh>
+      <mesh position={[halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[wheelRadius, wheelRadius, wheelThickness, 24]} />
+        <meshStandardMaterial color="#111827" roughness={0.9} />
+      </mesh>
+
+      <mesh position={[-halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[rimRadius, rimRadius, rimThickness, 24]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_MAIN_COLOR}
+          metalness={TRACTOR_RIM_MAIN_METALNESS}
+          roughness={TRACTOR_RIM_MAIN_ROUGHNESS}
+        />
+      </mesh>
+      <mesh position={[halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[rimRadius, rimRadius, rimThickness, 24]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_MAIN_COLOR}
+          metalness={TRACTOR_RIM_MAIN_METALNESS}
+          roughness={TRACTOR_RIM_MAIN_ROUGHNESS}
+        />
+      </mesh>
+
+      <mesh position={[-halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[hubRadius, hubRadius, capThickness, 20]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_HUB_COLOR}
+          metalness={TRACTOR_RIM_HUB_METALNESS}
+          roughness={TRACTOR_RIM_HUB_ROUGHNESS}
+        />
+      </mesh>
+      <mesh position={[halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[hubRadius, hubRadius, capThickness, 20]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_HUB_COLOR}
+          metalness={TRACTOR_RIM_HUB_METALNESS}
+          roughness={TRACTOR_RIM_HUB_ROUGHNESS}
+        />
+      </mesh>
+
+      <mesh position={[-halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[capRadius, capRadius, capThickness + 0.02, 18]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_CAP_COLOR}
+          metalness={TRACTOR_RIM_CAP_METALNESS}
+          roughness={TRACTOR_RIM_CAP_ROUGHNESS}
+        />
+      </mesh>
+      <mesh position={[halfTrack, wheelY, wheelZ]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+        <cylinderGeometry args={[capRadius, capRadius, capThickness + 0.02, 18]} />
+        <meshStandardMaterial
+          color={TRACTOR_RIM_CAP_COLOR}
+          metalness={TRACTOR_RIM_CAP_METALNESS}
+          roughness={TRACTOR_RIM_CAP_ROUGHNESS}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function TrailerReferenceModel({ container }: { container: Container3DProps }) {
   const gltf = useGLTF(TRAILER_MODEL_URL) as { scene: THREE.Group };
 
@@ -679,23 +792,29 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
     const attachFront = TRAILER_ATTACH_SIDE === "front";
     // En "rear" queremos que el tractor apunte hacia el frente de la caja.
     const rotationY = attachFront ? 0 : Math.PI;
-    // El punto de acople del modelo esta del lado de puertas (min.z en este GLTF).
-    // Usar este borde mantiene el tractor fuera del contenedor.
-    const hitchLocalZ = cargoBox.min.z;
-    const hitchOffsetZ = (rotationY === Math.PI ? -hitchLocalZ : hitchLocalZ) * scale;
+    // Acople real en quinta rueda: no usar el extremo del modelo (bumper), sino un punto
+    // adelantado sobre el chasis para que la caja quede montada sobre la plataforma.
+    const hitchRearLocalZ = sceneBox.min.z + size.z * TRAILER_HITCH_FROM_REAR_RATIO;
+    const hitchFrontLocalZ = sceneBox.max.z - size.z * TRAILER_HITCH_FROM_REAR_RATIO;
+    const hitchLocalY = sceneBox.min.y + size.y * TRAILER_HITCH_HEIGHT_RATIO;
+    const hitchLocalZ = attachFront ? hitchFrontLocalZ : hitchRearLocalZ;
+    const hitchOffset = new THREE.Vector3(0, hitchLocalY, hitchLocalZ)
+      .applyEuler(new THREE.Euler(0, rotationY, 0))
+      .multiplyScalar(scale);
     const frontPlaneZ = container.depth / 2;
     const rearPlaneZ = -container.depth / 2;
     const targetHitchZ = attachFront
       ? frontPlaneZ + TRAILER_HITCH_GAP
       : rearPlaneZ - TRAILER_HITCH_GAP;
-    const zPosition = targetHitchZ - hitchOffsetZ;
+    const zPosition = targetHitchZ - hitchOffset.z;
+    const yPosition = TRAILER_HITCH_TARGET_Y - hitchOffset.y;
 
     return {
       scale,
       rotationY,
       position: [
         -center.x * scale,
-        -sceneBox.min.y * scale,
+        yPosition,
         // Anclar por punto de enganche real (hitch) evita invertir frente/rear.
         zPosition,
       ] as [number, number, number],
@@ -712,6 +831,7 @@ function TrailerReferenceModel({ container }: { container: Container3DProps }) {
       renderOrder={-1}
     >
       <primitive object={trailerScene} />
+      <TractorThirdAxleVisual />
     </group>
   );
 }
